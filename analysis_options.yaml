@@ -1,0 +1,4 @@
+# The hand-written runtime targets lints/core. The protobuf bindings under
+# lib/src/onnx.pb*.dart are generated from ONNX's onnx.proto3 (Apache-2.0) and
+# carry their own `ignore_for_file` directives.
+include: package:lints/core.yaml

@@ -1,0 +1,20 @@
+name: onnx_dart
+description: A pure-Dart ONNX inference runtime for transformer-style models — no FFI, runs on every target including web and WebAssembly.
+version: 0.1.0
+repository: https://github.com/CrispStrobe/onnx_dart
+topics:
+  - onnx
+  - inference
+  - machine-learning
+  - transformer
+
+environment:
+  sdk: ^3.5.0
+
+dependencies:
+  protobuf: ^6.0.0
+  fixnum: ^1.1.1
+
+dev_dependencies:
+  lints: ^5.0.0
+  test: ^1.25.0
