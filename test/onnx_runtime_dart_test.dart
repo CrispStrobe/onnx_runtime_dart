@@ -1,8 +1,8 @@
 import 'dart:typed_data';
 
 import 'package:fixnum/fixnum.dart';
-import 'package:onnx_dart/onnx_dart.dart';
-import 'package:onnx_dart/onnx_proto.dart';
+import 'package:onnx_runtime_dart/onnx_runtime_dart.dart';
+import 'package:onnx_runtime_dart/onnx_proto.dart';
 import 'package:test/test.dart';
 
 /// Builds a serialized ONNX model computing `Y = Relu(X + W)` with a constant

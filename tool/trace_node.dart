@@ -1,5 +1,5 @@
 import 'dart:io';
-import 'package:onnx_dart/onnx_proto.dart';
+import 'package:onnx_runtime_dart/onnx_proto.dart';
 
 // trace_node <model> <nodeName> — prints the node + the producers of its inputs.
 void main(List<String> args) {

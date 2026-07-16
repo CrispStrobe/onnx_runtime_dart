@@ -1,8 +1,8 @@
 import 'dart:io';
 import 'dart:typed_data';
-import 'package:onnx_dart/onnx_dart.dart';
-import 'package:onnx_dart/onnx_dart_io.dart';
-import 'package:onnx_dart/onnx_proto.dart';
+import 'package:onnx_runtime_dart/onnx_runtime_dart.dart';
+import 'package:onnx_runtime_dart/onnx_runtime_dart_io.dart';
+import 'package:onnx_runtime_dart/onnx_proto.dart';
 
 // run_model <model.onnx> <out.txt>  — feeds fixed BERT-style tokens.
 void main(List<String> args) {

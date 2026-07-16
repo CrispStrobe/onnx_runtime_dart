@@ -10,7 +10,7 @@
 - **Weights:** load float16 (widened to float32), int32 and bool tensors, and
   **external-data** weights from a companion `.onnx.data` file — read on demand
   via `loadOnnxModel` / `OnnxModel.fromFile` in the new
-  `package:onnx_dart/onnx_dart_io.dart` (the web-safe core stays `dart:io`-free;
+  `package:onnx_runtime_dart/onnx_runtime_dart_io.dart` (the web-safe core stays `dart:io`-free;
   pass an `externalData` resolver there).
 - `Shape` now honours the `start` / `end` attributes (opset 15+), so models
   that slice the shape to read a single dim (e.g. RoPE position ranges) work.

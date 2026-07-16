@@ -2,7 +2,7 @@
 
 ## Runtime code — MIT
 
-The hand-written runtime (`lib/onnx_dart.dart`, `lib/src/tensor.dart`,
+The hand-written runtime (`lib/onnx_runtime_dart.dart`, `lib/src/tensor.dart`,
 `lib/src/onnx_ops.dart`, `lib/src/onnx_graph.dart`,
 `lib/src/onnx_proto_loader.dart`) is licensed under the MIT License — see
 [`LICENSE`](LICENSE).

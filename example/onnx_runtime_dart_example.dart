@@ -5,12 +5,12 @@
 // small model programmatically with the ONNX protobuf types so the example is
 // self-contained. Run with:
 //
-//   dart run example/onnx_dart_example.dart
+//   dart run example/onnx_runtime_dart_example.dart
 import 'dart:typed_data';
 
 import 'package:fixnum/fixnum.dart';
-import 'package:onnx_dart/onnx_dart.dart';
-import 'package:onnx_dart/onnx_proto.dart';
+import 'package:onnx_runtime_dart/onnx_runtime_dart.dart';
+import 'package:onnx_runtime_dart/onnx_proto.dart';
 
 void main() {
   // Build a model: S = X + W (W constant), Y = Relu(S).

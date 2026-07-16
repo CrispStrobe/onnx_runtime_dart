@@ -1,8 +1,9 @@
 import 'dart:typed_data';
 
-import 'package:onnx_dart/onnx_dart.dart';
-import 'package:onnx_dart/onnx_proto.dart';
-import 'package:onnx_dart/src/onnx_proto_loader.dart' show halfToFloat32Bits;
+import 'package:onnx_runtime_dart/onnx_runtime_dart.dart';
+import 'package:onnx_runtime_dart/onnx_proto.dart';
+import 'package:onnx_runtime_dart/src/onnx_proto_loader.dart'
+    show halfToFloat32Bits;
 import 'package:test/test.dart';
 
 void main() {

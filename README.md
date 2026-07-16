@@ -1,4 +1,4 @@
-# onnx_dart
+# onnx_runtime_dart
 
 A small, dependency-light **pure-Dart ONNX inference runtime**. No FFI and no
 native `onnxruntime` — the graph is interpreted in plain Dart, so the same code
@@ -19,15 +19,15 @@ embedder (external-data weights).
 
 ```yaml
 dependencies:
-  onnx_dart: ^0.1.0
+  onnx_runtime_dart: ^0.1.0
 ```
 
 ## Usage
 
 ```dart
 import 'dart:typed_data';
-import 'package:onnx_dart/onnx_dart.dart';
-import 'package:onnx_dart/onnx_dart_io.dart'; // native only (dart:io)
+import 'package:onnx_runtime_dart/onnx_runtime_dart.dart';
+import 'package:onnx_runtime_dart/onnx_runtime_dart_io.dart'; // native only (dart:io)
 
 void main() {
   // Resolves companion external-data files (large models) automatically.
@@ -49,7 +49,7 @@ Weights load from float32, float16, int32, int64 and bool tensors, inline or
 from a companion `.onnx.data` file (read on demand, so multi-GB models don't
 load into memory all at once).
 
-See [`example/onnx_dart_example.dart`](example/onnx_dart_example.dart) for a
+See [`example/onnx_runtime_dart_example.dart`](example/onnx_runtime_dart_example.dart) for a
 self-contained, runnable graph built with the protobuf types.
 
 ## Supported operators
@@ -76,7 +76,7 @@ pass over the nodes with a `name -> Tensor` value cache — initializers
 requested outputs are returned.
 
 To build or inspect models programmatically, import
-`package:onnx_dart/onnx_proto.dart` for the ONNX message types (`ModelProto`,
+`package:onnx_runtime_dart/onnx_proto.dart` for the ONNX message types (`ModelProto`,
 `GraphProto`, `NodeProto`, …).
 
 ## Licensing

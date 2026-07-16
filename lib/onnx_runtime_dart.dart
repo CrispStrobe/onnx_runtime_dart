@@ -8,7 +8,7 @@
 ///
 /// ```dart
 /// import 'dart:typed_data';
-/// import 'package:onnx_dart/onnx_dart.dart';
+/// import 'package:onnx_runtime_dart/onnx_runtime_dart.dart';
 ///
 /// final model = OnnxModel.fromBytes(bytes); // bytes of a .onnx file
 /// final out = model.run(
@@ -48,7 +48,7 @@ class OnnxModel {
   /// If the model stores its weights in a companion data file (large models,
   /// `dataLocation == EXTERNAL`), pass an [externalData] resolver that returns
   /// the bytes for a given `(location, offset, length)`. `OnnxModel.fromFile`
-  /// in `package:onnx_dart/onnx_dart_io.dart` wires this up automatically for
+  /// in `package:onnx_runtime_dart/onnx_runtime_dart_io.dart` wires this up automatically for
   /// the native (`dart:io`) platforms.
   factory OnnxModel.fromBytes(Uint8List bytes,
           {ExternalDataResolver? externalData}) =>

@@ -1,5 +1,5 @@
 import 'dart:io';
-import 'package:onnx_dart/onnx_proto.dart';
+import 'package:onnx_runtime_dart/onnx_proto.dart';
 
 void main(List<String> args) {
   final model = ModelProto.fromBuffer(File(args[0]).readAsBytesSync());
