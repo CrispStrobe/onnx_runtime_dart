@@ -3,16 +3,22 @@
 ## 0.2.0
 
 - Extended the operator set for BERT-family text embedders, rerankers, and
-  RoPE / ALiBi models: `Constant`, `ConstantOfShape`, `Range`, `Where`,
-  `Equal`, `Greater`, `Less`, `GreaterOrEqual`, `LessOrEqual`, `And`, `Or`,
-  `Not`, `Max`, `Min`, `Abs`, `Neg`, `Sigmoid`, `Tanh`, `Cos`, `Sin`, `Exp`,
-  `Log`, `ReduceSum` and `GatherElements`.
-- `Cast` now handles bool, and int32 / bool weights load (widened to int64).
-- **Fix:** `ReduceMean` now honours an `axes` **attribute** (older opsets, as in
-  BERT LayerNorm), not just an `axes` input — previously it collapsed to a
-  scalar, breaking normalization.
-- Verified **cosine-1.0 parity** against ONNX Runtime on
-  `jina-embeddings-v2-base-en` (max abs diff ~5e-6).
+  seq2seq encoders: `Constant`, `ConstantOfShape`, `Range`, `Where`, `Equal`,
+  `Greater`, `Less`, `GreaterOrEqual`, `LessOrEqual`, `And`, `Or`, `Not`, `Max`,
+  `Min`, `Abs`, `Neg`, `Sigmoid`, `Tanh`, `Cos`, `Sin`, `Exp`, `Log`,
+  `ReduceSum`, `GatherElements` and `CumSum`.
+- **Weights:** load float16 (widened to float32), int32 and bool tensors, and
+  **external-data** weights from a companion `.onnx.data` file — read on demand
+  via `loadOnnxModel` / `OnnxModel.fromFile` in the new
+  `package:onnx_dart/onnx_dart_io.dart` (the web-safe core stays `dart:io`-free;
+  pass an `externalData` resolver there).
+- **Fixes:** `ReduceMean`, `Unsqueeze` and `Squeeze` now honour an `axes`
+  **attribute** (older opsets), not just an `axes` input — previously this
+  collapsed reductions to a scalar / failed, breaking BERT LayerNorm and
+  older-opset exports.
+- Verified **cosine-1.0 parity** vs ONNX Runtime (max abs diff ~1e-6) on
+  `jina-embeddings-v2-base-en`, `bge-small-en-v1.5`, `all-MiniLM-L6-v2`,
+  `ms-marco-MiniLM` (reranker) and the `nllb-200-600M` encoder.
 
 ## 0.1.0
 

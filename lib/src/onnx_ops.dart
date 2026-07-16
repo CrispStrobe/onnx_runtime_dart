@@ -968,3 +968,46 @@ Tensor opGatherElements(Tensor data, Tensor indices, int axis) {
       ? Tensor.float(outF!, indices.shape)
       : Tensor.int64(outI!, indices.shape);
 }
+
+/// `CumSum` along [axis] (inclusive, forward by default; [exclusive] shifts the
+/// sum, [reverse] accumulates from the end) — used e.g. to derive position ids
+/// from an attention mask.
+Tensor opCumSum(Tensor x, int axis,
+    {bool exclusive = false, bool reverse = false}) {
+  final rank = x.shape.length;
+  final ax = axis < 0 ? axis + rank : axis;
+  final axisStride = x.strides[ax];
+  final axisSize = x.shape[ax];
+  final n = x.length;
+  final isFloat = x.isFloat;
+  final outF = isFloat ? Float32List(n) : null;
+  final outI = isFloat ? null : Int64List(n);
+  for (int i = 0; i < n; i++) {
+    if ((i ~/ axisStride) % axisSize != 0) continue; // only line starts
+    var accF = 0.0;
+    var accI = 0;
+    for (int s = 0; s < axisSize; s++) {
+      final k = reverse ? axisSize - 1 - s : s;
+      final idx = i + k * axisStride;
+      final v = x.getD(idx);
+      if (exclusive) {
+        if (isFloat) {
+          outF![idx] = accF;
+        } else {
+          outI![idx] = accI;
+        }
+        accF += v;
+        accI += v.round();
+      } else {
+        accF += v;
+        accI += v.round();
+        if (isFloat) {
+          outF![idx] = accF;
+        } else {
+          outI![idx] = accI;
+        }
+      }
+    }
+  }
+  return isFloat ? Tensor.float(outF!, x.shape) : Tensor.int64(outI!, x.shape);
+}

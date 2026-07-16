@@ -14,9 +14,10 @@ class OnnxGraphExecutor {
   final GraphProto _graph;
   final Map<String, Tensor> _initializers = {};
 
-  OnnxGraphExecutor(ModelProto model) : _graph = model.graph {
+  OnnxGraphExecutor(ModelProto model, {ExternalDataResolver? externalData})
+      : _graph = model.graph {
     for (final t in _graph.initializer) {
-      _initializers[t.name] = tensorFromProto(t);
+      _initializers[t.name] = tensorFromProto(t, ext: externalData);
     }
   }
 
@@ -82,10 +83,20 @@ class OnnxGraphExecutor {
         return [ops.opTranspose(need(0), attrs.getInts('perm')!)];
       case 'Squeeze':
         return [
-          ops.opSqueeze(need(0), ins.length > 1 ? ins[1]!.asIntList() : null)
+          ops.opSqueeze(
+              need(0),
+              ins.length > 1 && ins[1] != null
+                  ? ins[1]!.asIntList()
+                  : attrs.getInts('axes'))
         ];
       case 'Unsqueeze':
-        return [ops.opUnsqueeze(need(0), need(1).asIntList())];
+        return [
+          ops.opUnsqueeze(
+              need(0),
+              ins.length > 1 && ins[1] != null
+                  ? ins[1]!.asIntList()
+                  : attrs.getInts('axes')!)
+        ];
       case 'Concat':
         return [
           ops.opConcat([for (final t in ins) t!], attrs.getInt('axis')!)
@@ -204,6 +215,12 @@ class OnnxGraphExecutor {
                 : attrs.getInts('axes'),
             (attrs.getInt('keepdims') ?? 1) != 0,
           )
+        ];
+      case 'CumSum':
+        return [
+          ops.opCumSum(need(0), need(1).getI(0),
+              exclusive: (attrs.getInt('exclusive') ?? 0) != 0,
+              reverse: (attrs.getInt('reverse') ?? 0) != 0)
         ];
       case 'GatherElements':
         return [

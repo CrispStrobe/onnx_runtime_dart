@@ -26,10 +26,12 @@ import 'dart:typed_data';
 
 import 'src/onnx.pb.dart';
 import 'src/onnx_graph.dart';
+import 'src/onnx_proto_loader.dart';
 import 'src/tensor.dart';
 
 export 'src/tensor.dart' show Tensor, DType;
 export 'src/onnx_graph.dart' show OnnxGraphExecutor;
+export 'src/onnx_proto_loader.dart' show ExternalDataResolver;
 
 /// A parsed ONNX model ready to run.
 ///
@@ -42,8 +44,16 @@ class OnnxModel {
 
   /// Parses a serialized ONNX model ([bytes] of a `.onnx` file) and prepares
   /// it for execution.
-  factory OnnxModel.fromBytes(Uint8List bytes) =>
-      OnnxModel._(OnnxGraphExecutor(ModelProto.fromBuffer(bytes)));
+  ///
+  /// If the model stores its weights in a companion data file (large models,
+  /// `dataLocation == EXTERNAL`), pass an [externalData] resolver that returns
+  /// the bytes for a given `(location, offset, length)`. `OnnxModel.fromFile`
+  /// in `package:onnx_dart/onnx_dart_io.dart` wires this up automatically for
+  /// the native (`dart:io`) platforms.
+  factory OnnxModel.fromBytes(Uint8List bytes,
+          {ExternalDataResolver? externalData}) =>
+      OnnxModel._(OnnxGraphExecutor(ModelProto.fromBuffer(bytes),
+          externalData: externalData));
 
   /// Runs the graph with the given named [inputs] and returns the requested
   /// named [outputNames].

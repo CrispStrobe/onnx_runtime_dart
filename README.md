@@ -9,8 +9,10 @@ It implements the operator set used by **transformer / attention** style models
 deliberately *not* a complete ONNX runtime — there are no convolution, pooling
 or recurrent ops.
 
-Verified to **cosine-1.0 parity** against ONNX Runtime (via `ort`) on
-`jina-embeddings-v2-base-en` (max abs diff ~5e-6, float32 rounding).
+Verified to **cosine-1.0 parity** against ONNX Runtime (via `ort`), max abs diff
+~1e-6 (float32 rounding), on: `jina-embeddings-v2-base-en` (BERT + ALiBi),
+`bge-small-en-v1.5`, `all-MiniLM-L6-v2`, `ms-marco-MiniLM` (cross-encoder
+reranker) and the `nllb-200-600M` encoder (seq2seq / mBART).
 
 ## Install
 
@@ -22,13 +24,13 @@ dependencies:
 ## Usage
 
 ```dart
-import 'dart:io';
 import 'dart:typed_data';
 import 'package:onnx_dart/onnx_dart.dart';
+import 'package:onnx_dart/onnx_dart_io.dart'; // native only (dart:io)
 
 void main() {
-  final bytes = File('model.onnx').readAsBytesSync();
-  final model = OnnxModel.fromBytes(Uint8List.fromList(bytes));
+  // Resolves companion external-data files (large models) automatically.
+  final model = loadOnnxModel('model.onnx');
 
   final out = model.run(
     {'input': Tensor.float(Float32List.fromList([1, 2, 3, 4]), [1, 4])},
@@ -38,6 +40,13 @@ void main() {
   print(out['output']!.asFloatList());
 }
 ```
+
+On the web (no `dart:io`), use `OnnxModel.fromBytes(bytes)` directly; for
+external-data models pass an `externalData` resolver.
+
+Weights load from float32, float16, int32, int64 and bool tensors, inline or
+from a companion `.onnx.data` file (read on demand, so multi-GB models don't
+load into memory all at once).
 
 See [`example/onnx_dart_example.dart`](example/onnx_dart_example.dart) for a
 self-contained, runnable graph built with the protobuf types.
@@ -51,7 +60,7 @@ self-contained, runnable graph built with the protobuf types.
 - **Shape / index:** `Shape`, `Reshape`, `Transpose`, `Squeeze`, `Unsqueeze`,
   `Concat`, `Gather`, `GatherND`, `GatherElements`, `Expand`, `Slice`, `Range`,
   `Cast`, `Constant`, `ConstantOfShape`.
-- **Reduce / linalg:** `ReduceMean`, `ReduceSum`, `Softmax`,
+- **Reduce / linalg:** `ReduceMean`, `ReduceSum`, `CumSum`, `Softmax`,
   `LayerNormalization`, `MatMul`, `Gemm`, `Einsum`.
 
 Tensors are float32 or int64 (int32 and bool are widened to int64), row-major
