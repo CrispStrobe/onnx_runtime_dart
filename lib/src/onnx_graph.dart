@@ -3,6 +3,8 @@
 /// pass with a name -> Tensor value cache — no separate topo-sort needed.
 library;
 
+import 'dart:typed_data';
+
 import 'onnx.pb.dart';
 import 'onnx_ops.dart' as ops;
 import 'onnx_proto_loader.dart';
@@ -110,7 +112,9 @@ class OnnxGraphExecutor {
         return [
           ops.opReduceMean(
             need(0),
-            ins.length > 1 && ins[1] != null ? ins[1]!.asIntList() : null,
+            ins.length > 1 && ins[1] != null
+                ? ins[1]!.asIntList()
+                : attrs.getInts('axes'),
             (attrs.getInt('keepdims') ?? 1) != 0,
           )
         ];
@@ -142,6 +146,69 @@ class OnnxGraphExecutor {
         ];
       case 'Einsum':
         return [ops.opEinsum(attrs.getString('equation')!, need(0), need(1))];
+      // --- extended op set ---
+      case 'Constant':
+        return [attrs.constantTensor()];
+      case 'ConstantOfShape':
+        return [ops.opConstantOfShape(need(0), attrs.getTensor('value'))];
+      case 'Range':
+        return [ops.opRange(need(0), need(1), need(2))];
+      case 'Abs':
+        return [ops.opAbs(need(0))];
+      case 'Neg':
+        return [ops.opNeg(need(0))];
+      case 'Sigmoid':
+        return [ops.opSigmoid(need(0))];
+      case 'Tanh':
+        return [ops.opTanh(need(0))];
+      case 'Cos':
+        return [ops.opCos(need(0))];
+      case 'Sin':
+        return [ops.opSin(need(0))];
+      case 'Exp':
+        return [ops.opExp(need(0))];
+      case 'Log':
+        return [ops.opLog(need(0))];
+      case 'Not':
+        return [ops.opNot(need(0))];
+      case 'Equal':
+        return [ops.opEqual(need(0), need(1))];
+      case 'Greater':
+        return [ops.opGreater(need(0), need(1))];
+      case 'Less':
+        return [ops.opLess(need(0), need(1))];
+      case 'GreaterOrEqual':
+        return [ops.opGreaterOrEqual(need(0), need(1))];
+      case 'LessOrEqual':
+        return [ops.opLessOrEqual(need(0), need(1))];
+      case 'And':
+        return [ops.opAnd(need(0), need(1))];
+      case 'Or':
+        return [ops.opOr(need(0), need(1))];
+      case 'Max':
+        return [
+          ops.opMax([for (final t in ins) t!])
+        ];
+      case 'Min':
+        return [
+          ops.opMin([for (final t in ins) t!])
+        ];
+      case 'Where':
+        return [ops.opWhere(need(0), need(1), need(2))];
+      case 'ReduceSum':
+        return [
+          ops.opReduceSum(
+            need(0),
+            ins.length > 1 && ins[1] != null
+                ? ins[1]!.asIntList()
+                : attrs.getInts('axes'),
+            (attrs.getInt('keepdims') ?? 1) != 0,
+          )
+        ];
+      case 'GatherElements':
+        return [
+          ops.opGatherElements(need(0), need(1), attrs.getInt('axis') ?? 0)
+        ];
       default:
         throw UnsupportedError(
             'ONNX op "$opType" not implemented in the Dart interpreter');
@@ -164,4 +231,37 @@ class _AttrMap {
   List<int>? getInts(String name) => _byName.containsKey(name)
       ? _byName[name]!.ints.map((v) => v.toInt()).toList()
       : null;
+
+  /// The tensor value of a TENSOR-typed attribute (e.g. `ConstantOfShape`'s
+  /// `value`), or null if absent.
+  Tensor? getTensor(String name) =>
+      _byName.containsKey(name) ? tensorFromProto(_byName[name]!.t) : null;
+
+  /// The value produced by a `Constant` node — either a `value` tensor or one
+  /// of the scalar/list attribute forms the op allows.
+  Tensor constantTensor() {
+    if (_byName.containsKey('value')) {
+      return tensorFromProto(_byName['value']!.t);
+    }
+    final ints = _byName['value_ints'];
+    if (ints != null) {
+      return Tensor.int64(
+          Int64List.fromList(ints.ints.map((v) => v.toInt()).toList()),
+          [ints.ints.length]);
+    }
+    final i = _byName['value_int'];
+    if (i != null) {
+      return Tensor.int64(Int64List.fromList([i.i.toInt()]), const []);
+    }
+    final floats = _byName['value_floats'];
+    if (floats != null) {
+      return Tensor.float(
+          Float32List.fromList(floats.floats), [floats.floats.length]);
+    }
+    final f = _byName['value_float'];
+    if (f != null) {
+      return Tensor.float(Float32List.fromList([f.f]), const []);
+    }
+    throw StateError('Constant node has no recognized value attribute');
+  }
 }

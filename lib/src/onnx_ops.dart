@@ -1,8 +1,8 @@
-/// Implementations of the ~25 standard ONNX operators (per the public ONNX
-/// operator specification, https://onnx.ai/onnx/operators/) actually used by
-/// the Maia3 graph. Mechanical execution only — this file has no knowledge
-/// of "why" the graph is shaped the way it is, just how to run each declared
-/// op correctly, the same way any ONNX runtime would.
+/// Implementations of the standard ONNX operators (per the public ONNX
+/// operator specification, https://onnx.ai/onnx/operators/) used by
+/// transformer embedding / reranking graphs. Mechanical execution only — each
+/// op is run the same way any ONNX runtime would, with no knowledge of why the
+/// graph is shaped the way it is.
 library;
 
 import 'dart:math' as math;
@@ -213,8 +213,16 @@ Tensor opClip(Tensor x, Tensor? min, Tensor? max) {
 // ---------------------------------------------------------------------------
 
 Tensor opCast(Tensor x, int to) {
-  // ONNX TensorProto.DataType: 1 = FLOAT, 7 = INT64 (the only ones this graph uses)
-  if (to == 7) return Tensor.int64(x.asIntList(), x.shape);
+  // ONNX TensorProto.DataType: 1=FLOAT, 6=INT32, 7=INT64, 9=BOOL, 11=DOUBLE.
+  // We carry both int32 and int64 as our int64 tensor, and bool as int64 0/1.
+  if (to == 9) {
+    final out = Int64List(x.length);
+    for (int k = 0; k < x.length; k++) {
+      out[k] = x.getD(k) != 0 ? 1 : 0;
+    }
+    return Tensor.int64(out, x.shape);
+  }
+  if (to == 6 || to == 7) return Tensor.int64(x.asIntList(), x.shape);
   return Tensor.float(x.asFloatList(), x.shape);
 }
 
@@ -738,4 +746,225 @@ Tensor _einsumBidBjd(Tensor a, Tensor b) {
     }
   }
   return Tensor.float(out, [bs, i, j]);
+}
+
+// ---------------------------------------------------------------------------
+// Extended op set (transformer embedders / rerankers): unary math, comparison
+// and logical ops, selection, ranges and shape-fills. Added so the interpreter
+// runs the common BERT / RoPE embedding & reranking graphs, not just Maia3.
+// ---------------------------------------------------------------------------
+
+Tensor opAbs(Tensor a) => a.isFloat
+    ? _elementwiseUnary(a, (x) => x.abs())
+    : _unaryInt(a, (x) => x.abs());
+Tensor opNeg(Tensor a) =>
+    a.isFloat ? _elementwiseUnary(a, (x) => -x) : _unaryInt(a, (x) => -x);
+Tensor opSigmoid(Tensor a) =>
+    _elementwiseUnary(a, (x) => 1.0 / (1.0 + math.exp(-x)));
+Tensor opTanh(Tensor a) => _elementwiseUnary(a, _tanh);
+Tensor opCos(Tensor a) => _elementwiseUnary(a, math.cos);
+Tensor opSin(Tensor a) => _elementwiseUnary(a, math.sin);
+Tensor opExp(Tensor a) => _elementwiseUnary(a, math.exp);
+Tensor opLog(Tensor a) => _elementwiseUnary(a, math.log);
+
+double _tanh(double x) {
+  if (x > 20) return 1.0;
+  if (x < -20) return -1.0;
+  final e2 = math.exp(2 * x);
+  return (e2 - 1) / (e2 + 1);
+}
+
+Tensor _unaryInt(Tensor a, int Function(int) op) {
+  final out = Int64List(a.length);
+  for (int k = 0; k < a.length; k++) {
+    out[k] = op(a.getI(k));
+  }
+  return Tensor.int64(out, a.shape);
+}
+
+// Comparison / logical ops. ONNX yields BOOL tensors; we carry them as int64
+// 0/1 so downstream Where / Cast / And keep working with the two dtypes the
+// tensor type supports.
+Tensor _boolBinary(Tensor a, Tensor b, bool Function(double, double) p) {
+  final same = _shapeEq(a.shape, b.shape);
+  if (same || (b.length == 1 && a.rank >= b.rank)) {
+    final n = a.length;
+    final bScalar = b.length == 1;
+    final out = Int64List(n);
+    for (int k = 0; k < n; k++) {
+      out[k] = p(a.getD(k), b.getD(bScalar ? 0 : k)) ? 1 : 0;
+    }
+    return Tensor.int64(out, a.shape);
+  }
+  if (a.length == 1 && b.rank >= a.rank) {
+    final n = b.length;
+    final out = Int64List(n);
+    for (int k = 0; k < n; k++) {
+      out[k] = p(a.getD(0), b.getD(k)) ? 1 : 0;
+    }
+    return Tensor.int64(out, b.shape);
+  }
+  final outShape = _broadcastShape(a.shape, b.shape);
+  final n = outShape.fold<int>(1, (x, y) => x * y);
+  final coords = List<int>.filled(outShape.length, 0);
+  final out = Int64List(n);
+  for (int idx = 0; idx < n; idx++) {
+    out[idx] = p(a.getD(_flattenBroadcast(coords, a.shape)),
+            b.getD(_flattenBroadcast(coords, b.shape)))
+        ? 1
+        : 0;
+    for (int k = outShape.length - 1; k >= 0; k--) {
+      if (++coords[k] < outShape[k]) break;
+      coords[k] = 0;
+    }
+  }
+  return Tensor.int64(out, outShape);
+}
+
+Tensor opEqual(Tensor a, Tensor b) => _boolBinary(a, b, (x, y) => x == y);
+Tensor opGreater(Tensor a, Tensor b) => _boolBinary(a, b, (x, y) => x > y);
+Tensor opLess(Tensor a, Tensor b) => _boolBinary(a, b, (x, y) => x < y);
+Tensor opGreaterOrEqual(Tensor a, Tensor b) =>
+    _boolBinary(a, b, (x, y) => x >= y);
+Tensor opLessOrEqual(Tensor a, Tensor b) => _boolBinary(a, b, (x, y) => x <= y);
+Tensor opAnd(Tensor a, Tensor b) =>
+    _boolBinary(a, b, (x, y) => x != 0 && y != 0);
+Tensor opOr(Tensor a, Tensor b) =>
+    _boolBinary(a, b, (x, y) => x != 0 || y != 0);
+Tensor opNot(Tensor a) => _unaryInt(a, (x) => x != 0 ? 0 : 1);
+
+Tensor opMax(List<Tensor> ins) =>
+    ins.reduce((a, b) => _elementwiseBinary(a, b, math.max));
+Tensor opMin(List<Tensor> ins) =>
+    ins.reduce((a, b) => _elementwiseBinary(a, b, math.min));
+
+/// Element-wise select: `cond ? a : b`, broadcasting all three inputs.
+Tensor opWhere(Tensor cond, Tensor a, Tensor b) {
+  final outShape =
+      _broadcastShape(_broadcastShape(cond.shape, a.shape), b.shape);
+  final n = outShape.fold<int>(1, (x, y) => x * y);
+  final bothInt = !a.isFloat && !b.isFloat;
+  final coords = List<int>.filled(outShape.length, 0);
+
+  double pick() {
+    final c = cond.getD(_flattenBroadcast(coords, cond.shape));
+    return c != 0
+        ? a.getD(_flattenBroadcast(coords, a.shape))
+        : b.getD(_flattenBroadcast(coords, b.shape));
+  }
+
+  void advance() {
+    for (int k = outShape.length - 1; k >= 0; k--) {
+      if (++coords[k] < outShape[k]) return;
+      coords[k] = 0;
+    }
+  }
+
+  if (bothInt) {
+    final out = Int64List(n);
+    for (int idx = 0; idx < n; idx++) {
+      out[idx] = pick().round();
+      advance();
+    }
+    return Tensor.int64(out, outShape);
+  }
+  final out = Float32List(n);
+  for (int idx = 0; idx < n; idx++) {
+    out[idx] = pick();
+    advance();
+  }
+  return Tensor.float(out, outShape);
+}
+
+/// `Range(start, limit, delta)` — a 1-D sequence, int64 if the bounds are int.
+Tensor opRange(Tensor start, Tensor limit, Tensor delta) {
+  final s = start.getD(0), l = limit.getD(0), d = delta.getD(0);
+  final n = math.max(0, ((l - s) / d).ceil());
+  final bothInt = !start.isFloat && !delta.isFloat;
+  if (bothInt) {
+    final out = Int64List(n);
+    for (int k = 0; k < n; k++) {
+      out[k] = (start.getI(0) + k * delta.getI(0));
+    }
+    return Tensor.int64(out, [n]);
+  }
+  final out = Float32List(n);
+  for (int k = 0; k < n; k++) {
+    out[k] = s + k * d;
+  }
+  return Tensor.float(out, [n]);
+}
+
+/// `ConstantOfShape(shape)` filled with [value] (a 1-element tensor; default 0).
+Tensor opConstantOfShape(Tensor shapeT, Tensor? value) {
+  final shape = shapeT.asIntList().toList();
+  final n = shape.fold<int>(1, (a, b) => a * b);
+  if (value != null && !value.isFloat) {
+    final v = value.getI(0);
+    return Tensor.int64(Int64List(n)..fillRange(0, n, v), shape);
+  }
+  final v = value != null ? value.getD(0) : 0.0;
+  return Tensor.float(Float32List(n)..fillRange(0, n, v), shape);
+}
+
+/// `ReduceSum` over [axes] (all axes if null), matching [opReduceMean] shape
+/// semantics but summing rather than averaging.
+Tensor opReduceSum(Tensor x, List<int>? axes, bool keepdims) {
+  final rank = x.shape.length;
+  final ax = (axes ?? List<int>.generate(rank, (k) => k))
+      .map((a) => a < 0 ? a + rank : a)
+      .toSet();
+  final outShapeFull = [
+    for (int k = 0; k < rank; k++) ax.contains(k) ? 1 : x.shape[k]
+  ];
+  final n = outShapeFull.fold<int>(1, (a, b) => a * b);
+  final sums = Float64List(n);
+  final outStridesFull = Tensor.filledFloat(outShapeFull, 0).strides;
+  for (int idx = 0; idx < x.length; idx++) {
+    final coords = _unflatten(idx, x.shape);
+    int outFlat = 0;
+    for (int k = 0; k < rank; k++) {
+      outFlat += (ax.contains(k) ? 0 : coords[k]) * outStridesFull[k];
+    }
+    sums[outFlat] += x.getD(idx);
+  }
+  final out = Float32List(n);
+  for (int k = 0; k < n; k++) {
+    out[k] = sums[k];
+  }
+  if (keepdims) return Tensor.float(out, outShapeFull);
+  return Tensor.float(out, [
+    for (int k = 0; k < rank; k++)
+      if (!ax.contains(k)) x.shape[k]
+  ]);
+}
+
+/// `GatherElements` — output has the shape of [indices]; each element picks
+/// `data` at that coordinate with the [axis] index replaced by the index value.
+Tensor opGatherElements(Tensor data, Tensor indices, int axis) {
+  final rank = data.shape.length;
+  final ax = axis < 0 ? axis + rank : axis;
+  final dStrides = data.strides;
+  final n = indices.length;
+  final isFloat = data.isFloat;
+  final outF = isFloat ? Float32List(n) : null;
+  final outI = isFloat ? null : Int64List(n);
+  for (int idx = 0; idx < n; idx++) {
+    final coords = _unflatten(idx, indices.shape);
+    var j = indices.getI(idx);
+    if (j < 0) j += data.shape[ax];
+    coords[ax] = j;
+    int flat = 0;
+    for (int k = 0; k < rank; k++) {
+      flat += coords[k] * dStrides[k];
+    }
+    if (isFloat) {
+      outF![idx] = data.f![flat];
+    } else {
+      outI![idx] = data.i![flat];
+    }
+  }
+  return isFloat
+      ? Tensor.float(outF!, indices.shape)
+      : Tensor.int64(outI!, indices.shape);
 }
