@@ -1,0 +1,16 @@
+# Automated publishing to pub.dev via OIDC (no stored secrets).
+# Triggers when a version tag like v0.1.0 is pushed. The tag's version must
+# match `version:` in pubspec.yaml. Enable this repo + the `v{{version}}` tag
+# pattern under pub.dev/packages/<name>/admin → Automated publishing.
+name: Publish to pub.dev
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+
+jobs:
+  publish:
+    permissions:
+      id-token: write # required for OIDC authentication to pub.dev
+    uses: dart-lang/setup-dart/.github/workflows/publish.yml@v1
