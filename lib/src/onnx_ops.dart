@@ -230,8 +230,20 @@ Tensor opCast(Tensor x, int to) {
 // Shape manipulation
 // ---------------------------------------------------------------------------
 
-Tensor opShape(Tensor x) =>
-    Tensor.int64(Int64List.fromList(x.shape), [x.shape.length]);
+/// `Shape(x)` — the dimensions of [x] as an int64 vector. The optional
+/// [start] / [end] (opset 15+) return a slice of the shape, e.g.
+/// `Shape(x, start: 1)` drops the batch dim.
+Tensor opShape(Tensor x, {int? start, int? end}) {
+  final rank = x.shape.length;
+  var s = start ?? 0;
+  var e = end ?? rank;
+  if (s < 0) s += rank;
+  if (e < 0) e += rank;
+  s = s.clamp(0, rank);
+  e = e.clamp(0, rank);
+  final slice = e > s ? x.shape.sublist(s, e) : <int>[];
+  return Tensor.int64(Int64List.fromList(slice), [slice.length]);
+}
 
 Tensor opReshape(Tensor x, Tensor shapeT) => x.reshape(shapeT.asIntList());
 

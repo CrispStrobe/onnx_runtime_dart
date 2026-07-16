@@ -76,7 +76,10 @@ class OnnxGraphExecutor {
       case 'Cast':
         return [ops.opCast(need(0), attrs.getInt('to')!)];
       case 'Shape':
-        return [ops.opShape(need(0))];
+        return [
+          ops.opShape(need(0),
+              start: attrs.getInt('start'), end: attrs.getInt('end'))
+        ];
       case 'Reshape':
         return [ops.opReshape(need(0), need(1))];
       case 'Transpose':

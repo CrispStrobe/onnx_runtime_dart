@@ -12,13 +12,16 @@
   via `loadOnnxModel` / `OnnxModel.fromFile` in the new
   `package:onnx_dart/onnx_dart_io.dart` (the web-safe core stays `dart:io`-free;
   pass an `externalData` resolver there).
+- `Shape` now honours the `start` / `end` attributes (opset 15+), so models
+  that slice the shape to read a single dim (e.g. RoPE position ranges) work.
 - **Fixes:** `ReduceMean`, `Unsqueeze` and `Squeeze` now honour an `axes`
   **attribute** (older opsets), not just an `axes` input — previously this
   collapsed reductions to a scalar / failed, breaking BERT LayerNorm and
   older-opset exports.
 - Verified **cosine-1.0 parity** vs ONNX Runtime (max abs diff ~1e-6) on
   `jina-embeddings-v2-base-en`, `bge-small-en-v1.5`, `all-MiniLM-L6-v2`,
-  `ms-marco-MiniLM` (reranker) and the `nllb-200-600M` encoder.
+  `ms-marco-MiniLM` (reranker), the `nllb-200-600M` encoder, and a 0.6B RoPE
+  embedder with external-data weights.
 
 ## 0.1.0
 

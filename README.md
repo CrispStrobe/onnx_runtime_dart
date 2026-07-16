@@ -12,7 +12,8 @@ or recurrent ops.
 Verified to **cosine-1.0 parity** against ONNX Runtime (via `ort`), max abs diff
 ~1e-6 (float32 rounding), on: `jina-embeddings-v2-base-en` (BERT + ALiBi),
 `bge-small-en-v1.5`, `all-MiniLM-L6-v2`, `ms-marco-MiniLM` (cross-encoder
-reranker) and the `nllb-200-600M` encoder (seq2seq / mBART).
+reranker), the `nllb-200-600M` encoder (seq2seq / mBART), and a 0.6B **RoPE**
+embedder (external-data weights).
 
 ## Install
 

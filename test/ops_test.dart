@@ -96,4 +96,13 @@ void main() {
           reason: entry.key);
     }
   });
+  test('Shape honours start/end (slice of the shape)', () {
+    final g = GraphProto()
+      ..input.add(ValueInfoProto()..name = 'X')
+      ..output.add(ValueInfoProto()..name = 'Y')
+      ..node.add(node('Shape', ['X'], 'Y', [intAttr('start', 1)]));
+    final x = Tensor.float(Float32List(24), [2, 3, 4]);
+    final y = modelOf(g).run({'X': x}, ['Y'])['Y']!;
+    expect(y.asIntList(), [3, 4]); // batch dim dropped
+  });
 }
