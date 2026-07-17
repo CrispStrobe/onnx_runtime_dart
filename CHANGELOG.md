@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.3.4
+
+- **Correctness:** `Tensor.reshape` resolved `-1` before substituting
+  `0`-copy dims, so a target like `[0, 0, -1]` silently produced a wrong
+  shape (present since 0.1; first triggered by Kokoro's LSTM reshape).
+  Float→int casts saturate non-finite values like ORT (±inf → int64
+  min/max, NaN → 0); `CumSum` float accumulation rounds to float32
+  stepwise; `Cast(FLOAT16)` semantics already in 0.3.3.
+- **New ops:** `Sign`, `Atan`; `Resize` handles rank-3 NCW (1-D temporal).
+- **Performance (Kokoro-82M TTS: 398 s → 7.3 s for 1.5 s of audio):**
+  1-D `Conv` rides the im2col+SIMD GEMM path (was the generic per-element
+  N-D walk); 1-D `ConvTranspose` reformulated as GEMM + scatter-add; the
+  general broadcast path is an incremental odometer (no per-element
+  coordinate decomposition); the isolate pool's conv fan-out handles 1-D
+  convs (bitwise-identical).
+- **Diagnostics:** `OnnxModel.fromBytes(..., fuse: false)` disables pattern
+  fusion; executor errors include input shapes.
+- **Newly verified live:** Kokoro-82M (log-mel 0.995 — see README for why
+  waveform cosine is the wrong metric), Whisper-tiny (enc/dec/dec-with-past),
+  Moonshine-tiny (enc + merged If-decoder), BGE-M3, MPNet, GTE-v1.5,
+  ModernBERT, NomicBERT, DeBERTa-v2 rerankers, SPLADE, arctic-embed-xs,
+  multilingual-e5-small, gte-small, MiniLM-L12, granite-107m.
+
 ## 0.3.3
 
 - **Correctness (from an adversarial multi-agent review of 0.3.2):**
