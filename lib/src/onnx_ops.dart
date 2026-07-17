@@ -458,6 +458,15 @@ Tensor opHardSwish(Tensor a) =>
     _elementwiseUnary(a, (x) => x * (x / 6 + 0.5).clamp(0.0, 1.0));
 Tensor opSoftplus(Tensor a) =>
     _elementwiseUnary(a, (x) => math.log(1 + math.exp(x)));
+Tensor opFloor(Tensor a) =>
+    a.isFloat ? _elementwiseUnary(a, (x) => x.floorToDouble()) : a;
+Tensor opCeil(Tensor a) =>
+    a.isFloat ? _elementwiseUnary(a, (x) => x.ceilToDouble()) : a;
+
+/// `Round` — half to even, per the ONNX spec.
+Tensor opRound(Tensor a) => a.isFloat
+    ? _elementwiseUnary(a, (x) => _roundEven(x).toDouble())
+    : a;
 
 /// `Gelu`: exact (erf) form, or the tanh approximation when
 /// `approximate="tanh"`.
@@ -1458,6 +1467,37 @@ Tensor opWhere(Tensor cond, Tensor a, Tensor b) {
 
 /// `Size` — total element count as an int64 scalar.
 Tensor opSize(Tensor x) => Tensor.scalarInt(x.length);
+
+/// `Tile` — repeats [x] along each axis: `out[c] = x[c % shape]`.
+Tensor opTile(Tensor x, List<int> repeats) {
+  final rank = x.rank;
+  final outShape = [for (int a = 0; a < rank; a++) x.shape[a] * repeats[a]];
+  final n = outShape.fold<int>(1, (a, b) => a * b);
+  final srcStrides = x.strides;
+  final coords = List<int>.filled(rank, 0);
+  final isFloat = x.isFloat;
+  final outF = isFloat ? Float32List(n) : null;
+  final outI = isFloat ? null : Int64List(n);
+  final src = isFloat ? null : x.intData;
+  for (int idx = 0; idx < n; idx++) {
+    int off = 0;
+    for (int a = 0; a < rank; a++) {
+      off += (coords[a] % x.shape[a]) * srcStrides[a];
+    }
+    if (isFloat) {
+      outF![idx] = x.f![off];
+    } else {
+      outI![idx] = src![off];
+    }
+    for (int a = rank - 1; a >= 0; a--) {
+      if (++coords[a] < outShape[a]) break;
+      coords[a] = 0;
+    }
+  }
+  return isFloat
+      ? Tensor.float(outF!, outShape)
+      : Tensor.int64(outI!, outShape);
+}
 
 // ---------------------------------------------------------------------------
 // Quantization (QDQ format)

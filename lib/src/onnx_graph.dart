@@ -992,6 +992,12 @@ class OnnxGraphExecutor {
         return [ops.opHardSwish(need(0))];
       case 'Softplus':
         return [ops.opSoftplus(need(0))];
+      case 'Floor':
+        return [ops.opFloor(need(0))];
+      case 'Ceil':
+        return [ops.opCeil(need(0))];
+      case 'Round':
+        return [ops.opRound(need(0))];
       case 'Gelu':
         return [
           ops.opGelu(need(0),
@@ -1001,6 +1007,8 @@ class OnnxGraphExecutor {
         return [ops.opPRelu(need(0), need(1))];
       case 'Size':
         return [ops.opSize(need(0))];
+      case 'Tile':
+        return [ops.opTile(need(0), need(1).asIntList().toList())];
       case 'QuantizeLinear':
         // Saturation bounds come from the zero-point tensor's declared
         // dtype; absent zero point means uint8 per the spec.

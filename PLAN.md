@@ -13,9 +13,11 @@
 > (`parallelize(poolConv: true)`): activation copying outweighs banded
 > compute at CNN latencies. STFT/Split/ReduceSumSquare/float64 weights ✅
 > (parakeet nemo128 featurizer + RNN-T decoder verified). Remaining: Gemm
-> pool fan-out; QLinear per-row a-scales; parakeet int8 conformer encoder
-> (ORT oracle itself rejects naive input synthesis — needs correct
-> length/rel-pos input constraints). Numbers in `BENCHMARKS.md`;
+> pool fan-out; QLinear per-row a-scales. Parakeet int8 conformer encoder ✅
+> (Floor/Ceil/Round, Tile, 1-D ConvInteger; within intrinsic dynamic-quant
+> band — and that export is itself lossy: int8-vs-fp32 cosine 0.63).
+> Register-blocked GEMM microkernel landed; quiet-machine re-measure
+> pending. v0.3.0 tagged and published. Numbers in `BENCHMARKS.md`;
 > per-op ORT parity fixtures in `test/fixtures/` (`tool/gen_fixtures.py`),
 > live-model parity via `tool/live_parity.py|dart`.
 

@@ -19,6 +19,10 @@ Native ORT reference on identical inputs (`onnxruntime` 1.27.0 CPU):
 Isolate pool scaling on MiniLM (single warmed run each, bitwise-identical
 outputs): 0 workers ≈ 120 ms, 2 workers ≈ 48 ms, 4 workers ≈ 42 ms.
 
+Pending: the register-blocked 4×8 GEMM microkernel (accumulator tile in
+locals instead of load-modify-store buffers) landed correctness-verified at
+load-avg ~75 — re-measure all three rows above on a quiet machine.
+
 Caveat: this machine runs other dev workloads; min-of-15-iters is the robust
 number, means can inflate 2–3× under contention. Rows above marked "quiet
 machine" were measured at load ≈ 4; the earlier rows at load 10–30.

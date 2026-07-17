@@ -274,6 +274,16 @@ def main():
     emit("hardswish",
          [helper.make_node("HardSwish", ["x"], ["out0"])],
          {"x": f32(3, 4, 5)})
+    emit("tile",
+         [helper.make_node("Tile", ["x", "rep"], ["out0"])],
+         {"x": f32(2, 3, 4)},
+         initializers={"rep": np.array([2, 1, 3], dtype=np.int64)})
+    emit("floor_ceil_round",
+         [helper.make_node("Floor", ["x"], ["f"]),
+          helper.make_node("Ceil", ["x"], ["c"]),
+          helper.make_node("Round", ["x"], ["r"]),
+          helper.make_node("Concat", ["f", "c", "r"], ["out0"], axis=0)],
+         {"x": (f32(2, 6) * 3)})
     emit("softplus",
          [helper.make_node("Softplus", ["x"], ["out0"])],
          {"x": f32(3, 4, 5)})
@@ -517,6 +527,13 @@ def main():
          initializers={"x": u8(1, 2, 5, 5), "w": i8(3, 2, 3, 3),
                        "xz": np.array(120, dtype=np.uint8),
                        "wz": np.array(2, dtype=np.int8)})
+    emit("convinteger_1d",
+         [helper.make_node("ConvInteger", ["x", "w", "xz", "wz"], ["out0"],
+                           pads=[2, 2])],
+         {},
+         initializers={"x": u8(1, 3, 12), "w": i8(4, 3, 5),
+                       "xz": np.array(100, dtype=np.uint8),
+                       "wz": np.array(-1, dtype=np.int8)})
     emit("qlinearmatmul",
          [helper.make_node("QLinearMatMul",
                            ["a", "as_", "az", "b", "bs", "bz",

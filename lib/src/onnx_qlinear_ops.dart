@@ -230,11 +230,25 @@ List<int> _convOutSpatial(Tensor x, Tensor w, List<int> strides,
   return out;
 }
 
-/// `ConvInteger` (2-D): int32 accumulator output.
+/// `ConvInteger` (1-D or 2-D): int32 accumulator output. 1-D convs run as
+/// 2-D with a singleton height.
 Tensor opConvInteger(Tensor x, Tensor w, Tensor? xZp, Tensor? wZp,
     {List<int>? strides, List<int>? pads, List<int>? dilations,
     int group = 1}) {
-  assert(x.rank == 4, 'ConvInteger implemented for 2-D convs');
+  if (x.rank == 3) {
+    final y = opConvInteger(
+      x.reshape([x.shape[0], x.shape[1], 1, x.shape[2]]),
+      w.reshape([w.shape[0], w.shape[1], 1, w.shape[2]]),
+      xZp,
+      wZp,
+      strides: [1, strides?.first ?? 1],
+      pads: pads == null ? null : [0, pads[0], 0, pads[1]],
+      dilations: [1, dilations?.first ?? 1],
+      group: group,
+    );
+    return y.reshape([y.shape[0], y.shape[1], y.shape[3]]);
+  }
+  assert(x.rank == 4, 'ConvInteger implemented for 1-D/2-D convs');
   if (wZp != null && wZp.length != 1 && wZp.length != w.shape[0]) {
     throw UnsupportedError('ConvInteger: weight zero point must be scalar '
         'or per-output-channel');

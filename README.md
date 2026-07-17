@@ -24,7 +24,11 @@ ReduceMax — with a complete pure-Dart scoring pipeline in
 225 convs + BatchNorm/AveragePool/Pad/ReduceProd), **Maia3-5M** (chess
 transformer, policy + WDL value heads, Einsum attention), and from the
 **Parakeet-TDT 0.6B** ASR stack: the NeMo mel featurizer (`STFT` op +
-float64 weights) and the RNN-T decoder/joint (LSTM + Split).
+float64 weights), the RNN-T decoder/joint (LSTM + Split), and the int8
+conformer encoder (ConvInteger 1-D/2-D + MatMulInteger + Tile; dynamic-quant
+model, so judged by the intrinsic-band criterion — our deviation from
+ORT-int8, cosine 0.997, is far below that export's own quantization error vs
+fp32, cosine 0.63).
 Every op is additionally covered by generated per-op parity fixtures against
 native ONNX Runtime (`test/fixtures/`, see `tool/gen_fixtures.py`).
 
