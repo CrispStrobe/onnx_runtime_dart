@@ -35,9 +35,13 @@ def main():
                 return d
             if i == 0:
                 return 1  # leading dynamic dim is batch-like, always
-            if isinstance(d, str) and any(
-                    t in d.lower() for t in ("frame", "seq", "time", "len")):
-                return seq
+            if isinstance(d, str):
+                dl = d.lower()
+                if "channel" in dl:
+                    return 3
+                if any(t in dl for t in ("height", "width", "frame", "seq",
+                                         "time", "len")):
+                    return seq
             return seq if i == nd - 1 else 1
         dims = [resolve(i, d) for i, d in enumerate(inp.shape)]
         if inp.name == "sr":  # sample-rate scalar (VAD-style audio models)

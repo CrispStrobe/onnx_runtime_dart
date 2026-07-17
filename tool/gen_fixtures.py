@@ -274,6 +274,23 @@ def main():
     emit("hardswish",
          [helper.make_node("HardSwish", ["x"], ["out0"])],
          {"x": f32(3, 4, 5)})
+    emit("trilu_upper",
+         [helper.make_node("Trilu", ["x"], ["out0"])],
+         {"x": f32(2, 4, 5)})
+    emit("trilu_lower_k",
+         [helper.make_node("Trilu", ["x", "k"], ["out0"], upper=0)],
+         {"x": f32(3, 4)},
+         initializers={"k": np.array(-1, dtype=np.int64)})
+    emit("scatternd",
+         [helper.make_node("ScatterND", ["d", "i", "u"], ["out0"])],
+         {"d": f32(4, 3)},
+         initializers={"i": np.array([[1], [3]], dtype=np.int64),
+                       "u": f32(2, 3)})
+    emit("scatternd_deep",
+         [helper.make_node("ScatterND", ["d", "i", "u"], ["out0"])],
+         {"d": f32(2, 3, 4)},
+         initializers={"i": np.array([[0, 2], [1, 0]], dtype=np.int64),
+                       "u": f32(2, 4)})
     emit("div_int64_truncates",
          [helper.make_node("Div", ["a", "b"], ["out0"])],
          {},

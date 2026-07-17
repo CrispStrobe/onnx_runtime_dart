@@ -67,8 +67,13 @@ class OnnxGraphExecutor {
   /// bounds still need (3 = INT8 per the proto enum).
   final Map<String, int> _initializerElemType = {};
 
+  /// External-data resolver, kept for tensors that live in node
+  /// attributes (e.g. large `Constant` values) rather than initializers.
+  final ExternalDataResolver? _ext;
+
   OnnxGraphExecutor(ModelProto model, {ExternalDataResolver? externalData})
-      : _graph = model.graph {
+      : _graph = model.graph,
+        _ext = externalData {
     for (final t in _graph.initializer) {
       _initializers[t.name] = tensorFromProto(t, ext: externalData);
       _initializerElemType[t.name] = t.dataType;
@@ -170,7 +175,7 @@ class OnnxGraphExecutor {
 
     for (final sm in nodes) {
       if (sm.opType != 'Softmax') continue;
-      final axis = _AttrMap(sm.attribute).getInt('axis') ?? -1;
+      final axis = _AttrMap(sm.attribute, _ext).getInt('axis') ?? -1;
       if (axis != -1) continue; // row softmax only (mask/scale fold per row)
       // scores + mask. The scores operand is either MatMul directly (exports
       // that pre-scale Q/K) or MatMul followed by a scalar Div/Mul.
@@ -260,7 +265,7 @@ class OnnxGraphExecutor {
         final ins = [
           for (final s in node.input) s.isEmpty ? null : _initializers[s]
         ];
-        outs = _dispatch(node, ins, _AttrMap(node.attribute));
+        outs = _dispatch(node, ins, _AttrMap(node.attribute, _ext));
       } catch (_) {
         kept.add(node); // unsupported/failed op: leave it for run time
         continue;
@@ -329,7 +334,7 @@ class OnnxGraphExecutor {
         if (t == null || !t.isFloat || t.rank != 2) continue;
         if (t.length < minWeightElements) continue;
         final transB =
-            (_AttrMap(node.attribute).getInt('transB') ?? 0) != 0;
+            (_AttrMap(node.attribute, _ext).getInt('transB') ?? 0) != 0;
         final b = transB ? ops.opTranspose(t, [1, 0]) : t;
         toPartition['gemm:$name'] = (b.f!, b.shape[0], b.shape[1]);
       } else if (node.opType == 'Conv' && node.input.length >= 2) {
@@ -363,7 +368,7 @@ class OnnxGraphExecutor {
     final pool = _pool;
 
     for (final node in _nodes) {
-      final attrs = _AttrMap(node.attribute);
+      final attrs = _AttrMap(node.attribute, _ext);
       final ins = [
         for (final name in node.input) name.isEmpty ? null : values[name]
       ];
@@ -485,7 +490,7 @@ class OnnxGraphExecutor {
       ExecutionProfile? profile) {
     final sw = profile == null ? null : Stopwatch();
     for (final node in nodes) {
-      final attrs = _AttrMap(node.attribute);
+      final attrs = _AttrMap(node.attribute, _ext);
       final ins = [
         for (final name in node.input) name.isEmpty ? null : values[name]
       ];
@@ -531,7 +536,7 @@ class OnnxGraphExecutor {
       List<Tensor?> boundInputs, ExecutionProfile? profile) {
     final values = Map.of(outer);
     for (final t in g.initializer) {
-      values[t.name] = tensorFromProto(t);
+      values[t.name] = tensorFromProto(t, ext: _ext);
     }
     for (int k = 0; k < g.input.length && k < boundInputs.length; k++) {
       if (boundInputs[k] != null) values[g.input[k].name] = boundInputs[k]!;
@@ -1049,6 +1054,17 @@ class OnnxGraphExecutor {
         return [ops.opSize(need(0))];
       case 'Tile':
         return [ops.opTile(need(0), need(1).asIntList().toList())];
+      case 'Trilu':
+        return [
+          ops.opTrilu(need(0),
+              upper: (attrs.getInt('upper') ?? 1) != 0,
+              k: ins.length > 1 && ins[1] != null ? ins[1]!.getI(0) : 0)
+        ];
+      case 'ScatterND':
+        if ((attrs.getString('reduction') ?? 'none') != 'none') {
+          throw UnsupportedError('ScatterND: only reduction=none supported');
+        }
+        return [ops.opScatterND(need(0), need(1), need(2))];
       case 'QuantizeLinear':
         // Saturation bounds come from the zero-point tensor's declared
         // dtype; absent zero point means uint8 per the spec.
@@ -1187,7 +1203,8 @@ class OnnxGraphExecutor {
 /// Convenience accessor over a NodeProto's AttributeProto list.
 class _AttrMap {
   final Map<String, AttributeProto> _byName;
-  _AttrMap(Iterable<AttributeProto> attrs)
+  final ExternalDataResolver? _ext;
+  _AttrMap(Iterable<AttributeProto> attrs, [this._ext])
       : _byName = {for (final a in attrs) a.name: a};
 
   int? getInt(String name) =>
@@ -1211,13 +1228,13 @@ class _AttrMap {
   /// The tensor value of a TENSOR-typed attribute (e.g. `ConstantOfShape`'s
   /// `value`), or null if absent.
   Tensor? getTensor(String name) =>
-      _byName.containsKey(name) ? tensorFromProto(_byName[name]!.t) : null;
+      _byName.containsKey(name) ? tensorFromProto(_byName[name]!.t, ext: _ext) : null;
 
   /// The value produced by a `Constant` node — either a `value` tensor or one
   /// of the scalar/list attribute forms the op allows.
   Tensor constantTensor() {
     if (_byName.containsKey('value')) {
-      return tensorFromProto(_byName['value']!.t);
+      return tensorFromProto(_byName['value']!.t, ext: _ext);
     }
     final ints = _byName['value_ints'];
     if (ints != null) {

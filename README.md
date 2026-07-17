@@ -15,7 +15,10 @@ what is covered.
 Verified to **cosine-1.0 parity** against ONNX Runtime (via `ort`), max abs diff
 ~1e-6 (float32 rounding), on: `jina-embeddings-v2-base-en` (BERT + ALiBi),
 `bge-small-en-v1.5`, `all-MiniLM-L6-v2`, `ms-marco-MiniLM` (cross-encoder
-reranker), the `nllb-200-600M` encoder (seq2seq / mBART), a 0.6B **RoPE**
+reranker), the full **`nllb-200-600M`** seq2seq stack — encoder, decoder
+(256k-vocab logits + all present-KV outputs) and **`decoder_with_past`**
+(KV-cache incremental decoding), so translation loops run end to end —
+**TrOCR** (ViT image encoder + text decoder, both cosine-1.0), a 0.6B **RoPE**
 embedder (external-data weights), the vision CNNs **MobileNetV2** and
 **ResNet18**, **Silero VAD** (Conv1D + LSTM + `If` + reflect-`Pad`),
 **AECMOS** (both echo-MOS models: Conv + MaxPool + bidirectional GRU +

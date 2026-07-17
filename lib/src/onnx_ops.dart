@@ -1502,6 +1502,80 @@ Tensor opWhere(Tensor cond, Tensor a, Tensor b) {
 /// `Size` — total element count as an int64 scalar.
 Tensor opSize(Tensor x) => Tensor.scalarInt(x.length);
 
+/// `Trilu` — keeps the upper (or lower) triangle of the last two dims,
+/// zeroing the rest; [k] shifts the diagonal.
+Tensor opTrilu(Tensor x, {bool upper = true, int k = 0}) {
+  final rank = x.rank;
+  final rows = x.shape[rank - 2], cols = x.shape[rank - 1];
+  final batch = x.length ~/ (rows * cols);
+  if (x.isFloat) {
+    final out = Float32List(x.length);
+    final xf = x.f!;
+    for (int b = 0; b < batch; b++) {
+      final base = b * rows * cols;
+      for (int i = 0; i < rows; i++) {
+        for (int j = 0; j < cols; j++) {
+          final keep = upper ? j - i >= k : j - i <= k;
+          if (keep) out[base + i * cols + j] = xf[base + i * cols + j];
+        }
+      }
+    }
+    return Tensor.float(out, x.shape);
+  }
+  final out = Int64List(x.length);
+  final xi = x.intData;
+  for (int b = 0; b < batch; b++) {
+    final base = b * rows * cols;
+    for (int i = 0; i < rows; i++) {
+      for (int j = 0; j < cols; j++) {
+        final keep = upper ? j - i >= k : j - i <= k;
+        if (keep) out[base + i * cols + j] = xi[base + i * cols + j];
+      }
+    }
+  }
+  return Tensor.int64(out, x.shape);
+}
+
+/// `ScatterND` — copy of [data] with [updates] written at [indices]
+/// (index tuples over the leading dims; each update fills the remaining
+/// trailing block). No reduction (last write wins, per the default).
+Tensor opScatterND(Tensor data, Tensor indices, Tensor updates) {
+  final idxDepth = indices.shape.last;
+  final nIdx = indices.length ~/ idxDepth;
+  final strides = data.strides;
+  int blockLen = 1;
+  for (int a = idxDepth; a < data.rank; a++) {
+    blockLen *= data.shape[a];
+  }
+  final ii = indices.asIntList();
+  if (data.isFloat) {
+    final out = Float32List.fromList(data.f!);
+    final uf = updates.asFloatList();
+    for (int t = 0; t < nIdx; t++) {
+      int off = 0;
+      for (int d = 0; d < idxDepth; d++) {
+        var v = ii[t * idxDepth + d];
+        if (v < 0) v += data.shape[d];
+        off += v * strides[d];
+      }
+      out.setRange(off, off + blockLen, uf, t * blockLen);
+    }
+    return Tensor.float(out, data.shape);
+  }
+  final out = Int64List.fromList(data.asIntList());
+  final ui = updates.asIntList();
+  for (int t = 0; t < nIdx; t++) {
+    int off = 0;
+    for (int d = 0; d < idxDepth; d++) {
+      var v = ii[t * idxDepth + d];
+      if (v < 0) v += data.shape[d];
+      off += v * strides[d];
+    }
+    out.setRange(off, off + blockLen, Int64List.sublistView(ui, t * blockLen, (t + 1) * blockLen));
+  }
+  return Tensor.int64(out, data.shape);
+}
+
 /// `Tile` — repeats [x] along each axis: `out[c] = x[c % shape]`.
 Tensor opTile(Tensor x, List<int> repeats) {
   final rank = x.rank;
