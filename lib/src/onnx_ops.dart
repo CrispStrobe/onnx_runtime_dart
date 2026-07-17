@@ -1250,6 +1250,57 @@ Tensor opMatMul(Tensor a, Tensor b) {
   return Tensor.float(out, outShape);
 }
 
+/// Fused RMSNorm: `y = x * gamma / sqrt(mean(x², axis) + eps)` — the
+/// 7-node Pow/ReduceMean/Add/Sqrt/Reciprocal/Mul/Mul chain emitted by
+/// RMSNorm exports (Qwen-style transformers, Maia3).
+Tensor opRMSNorm(Tensor x, Tensor gamma, int axis, double eps) {
+  final ax = axis < 0 ? axis + x.rank : axis;
+  final xf = x.f!;
+  final gf = gamma.asFloatList();
+  final out = Float32List(xf.length);
+  if (ax == x.rank - 1) {
+    final d = x.shape[ax];
+    final rows = xf.length ~/ d;
+    for (int r = 0; r < rows; r++) {
+      final base = r * d;
+      double ss = 0;
+      for (int j = 0; j < d; j++) {
+        final v = xf[base + j];
+        ss += v * v;
+      }
+      final inv = 1.0 / math.sqrt(ss / d + eps);
+      for (int j = 0; j < d; j++) {
+        out[base + j] = xf[base + j] * inv * gf[j];
+      }
+    }
+    return Tensor.float(out, x.shape);
+  }
+  // General axis: strided walk.
+  final dim = x.shape[ax];
+  int outer = 1, inner = 1;
+  for (int a = 0; a < ax; a++) {
+    outer *= x.shape[a];
+  }
+  for (int a = ax + 1; a < x.rank; a++) {
+    inner *= x.shape[a];
+  }
+  for (int o = 0; o < outer; o++) {
+    for (int i = 0; i < inner; i++) {
+      final base = o * dim * inner + i;
+      double ss = 0;
+      for (int j = 0; j < dim; j++) {
+        final v = xf[base + j * inner];
+        ss += v * v;
+      }
+      final inv = 1.0 / math.sqrt(ss / dim + eps);
+      for (int j = 0; j < dim; j++) {
+        out[base + j * inner] = xf[base + j * inner] * inv * gf[j];
+      }
+    }
+  }
+  return Tensor.float(out, x.shape);
+}
+
 /// Fused scaled-dot-product-attention epilogue:
 /// `MatMul(Softmax(MatMul(a, b) * scale + mask, axis: -1), v)`.
 ///

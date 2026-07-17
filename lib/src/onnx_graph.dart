@@ -6,6 +6,8 @@ library;
 import 'dart:math' as math;
 import 'dart:typed_data';
 
+import 'package:fixnum/fixnum.dart';
+
 import 'onnx.pb.dart';
 import 'onnx_nn_ops.dart' as nn;
 import 'onnx_ops.dart' as ops;
@@ -171,6 +173,65 @@ class OnnxGraphExecutor {
         ..name = 'fused_gelu_${mul2.output[0]}'
         ..input.add(x)
         ..output.add(mul2.output[0]);
+    }
+
+    // RMSNorm: x -> Pow(2) -> ReduceMean(axis) -> Add(eps) -> Sqrt ->
+    // Reciprocal -> Mul(x) -> Mul(gamma). Qwen-style transformers and Maia3
+    // carry 16-113 of these chains.
+    for (final pw in nodes) {
+      if (pw.opType != 'Pow') continue;
+      final exp = scalarInit(pw.input[1]);
+      if (exp == null || exp != 2.0) continue;
+      final x = pw.input[0];
+      final rm = soleConsumer(pw.output[0]);
+      if (rm == null || rm.opType != 'ReduceMean') continue;
+      // Single reduce axis, from attribute or initializer input.
+      final axesAttr = _AttrMap(rm.attribute, _ext).getInts('axes');
+      List<int>? axes = axesAttr;
+      if (axes == null && rm.input.length > 1) {
+        final t = _initializers[rm.input[1]];
+        if (t != null) axes = t.asIntList().toList();
+      }
+      if (axes == null || axes.length != 1) continue;
+      if ((_AttrMap(rm.attribute, _ext).getInt('keepdims') ?? 1) != 1) {
+        continue;
+      }
+      final addEps = soleConsumer(rm.output[0]);
+      if (addEps == null || addEps.opType != 'Add') continue;
+      final eps = scalarInit(addEps.input[0] == rm.output[0]
+          ? addEps.input[1]
+          : addEps.input[0]);
+      if (eps == null) continue;
+      final sqrt = soleConsumer(addEps.output[0]);
+      if (sqrt == null || sqrt.opType != 'Sqrt') continue;
+      final rec = soleConsumer(sqrt.output[0]);
+      if (rec == null || rec.opType != 'Reciprocal') continue;
+      final mul1 = soleConsumer(rec.output[0]);
+      if (mul1 == null || mul1.opType != 'Mul') continue;
+      final mul1Other =
+          mul1.input[0] == rec.output[0] ? mul1.input[1] : mul1.input[0];
+      if (mul1Other != x) continue;
+      final mul2 = soleConsumer(mul1.output[0]);
+      if (mul2 == null || mul2.opType != 'Mul') continue;
+      final gamma =
+          mul2.input[0] == mul1.output[0] ? mul2.input[1] : mul2.input[0];
+      final gammaT = _initializers[gamma];
+      if (gammaT == null || gammaT.rank != 1) continue;
+
+      removed.addAll([pw, rm, addEps, sqrt, rec, mul1]);
+      replaceAt[mul2] = NodeProto()
+        ..opType = '_FusedRMSNorm'
+        ..name = 'fused_rmsnorm_${mul2.output[0]}'
+        ..input.addAll([x, gamma])
+        ..output.add(mul2.output[0])
+        ..attribute.addAll([
+          AttributeProto()
+            ..name = 'axis'
+            ..i = Int64(axes.first),
+          AttributeProto()
+            ..name = 'epsilon'
+            ..f = eps,
+        ]);
     }
 
     for (final sm in nodes) {
@@ -688,6 +749,11 @@ class OnnxGraphExecutor {
       // --- synthetic fused ops (created by _fusePatterns, never in files) ---
       case '_FusedGelu':
         return [ops.opGelu(need(0))];
+      case '_FusedRMSNorm':
+        return [
+          ops.opRMSNorm(need(0), need(1), attrs.getInt('axis')!,
+              attrs.getFloat('epsilon')!)
+        ];
       case '_FusedSDPA':
         return [
           ops.opFusedSDPA(need(0), need(1), need(2), need(3),

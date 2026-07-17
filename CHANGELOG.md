@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.3.2
+
+- **Correctness:** `Clip` with min/max as attributes (opset 6–10, e.g. every
+  `Relu6` in TF-converted models) was silently unbounded; `Transpose`
+  without `perm` now defaults to reversing axes; `TopK` handles empty axes.
+- **Performance:** shared-weight batched `MatMul`s collapse into one GEMM
+  (`[64,1,k]@[k,n]` no longer re-packs the weight per batch row — Maia3-5M
+  2.5×: 335→135 ms, 102 ms with 4 workers); SIMD row-dot einsum kernels;
+  fused RMSNorm (`x·rsqrt(mean(x²)+eps)·γ` chains, 16–113 per Qwen-style
+  model).
+- **New ops:** general 1/2-operand `Einsum`, `GroupNormalization`,
+  `GridSample`, `RoiAlign`, `ArgMax`/`ArgMin`, `NonZero`, `TopK`,
+  `NonMaxSuppression`, `Trilu`, `ScatterND`, `Upsample`, `Dropout`;
+  `Constant` attributes stored in external data now resolve.
+- **Newly verified live** (all vs native ORT): NLLB-600M decoder +
+  `decoder_with_past` (KV cache), TrOCR encoder/decoder, SSD-MobileNetV1
+  end-to-end **bit-identical**, SAM mask decoder, TAESD SD-VAE decoder,
+  Ultraface, style transfer, super-resolution, emotion-ferplus.
+
 ## 0.3.1
 
 - **Correctness:** integer `Div` now truncates toward zero per the ONNX spec

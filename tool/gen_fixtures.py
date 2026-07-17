@@ -566,6 +566,20 @@ def main():
          initializers={"sqrt2": np.array(np.sqrt(2), dtype=np.float32),
                        "one": np.array(1.0, dtype=np.float32),
                        "half": np.array(0.5, dtype=np.float32)})
+    # RMSNorm chain (Qwen/Maia style): x*rsqrt(mean(x^2)+eps)*gamma
+    emit("rmsnorm_pattern",
+         [helper.make_node("Pow", ["x", "two"], ["p"]),
+          helper.make_node("ReduceMean", ["p", "ax"], ["m"], keepdims=1),
+          helper.make_node("Add", ["m", "eps"], ["a"]),
+          helper.make_node("Sqrt", ["a"], ["sq"]),
+          helper.make_node("Reciprocal", ["sq"], ["r"]),
+          helper.make_node("Mul", ["x", "r"], ["n"]),
+          helper.make_node("Mul", ["n", "gamma"], ["out0"])],
+         {"x": f32(2, 5, 16)},
+         initializers={"two": np.array(2.0, dtype=np.float32),
+                       "ax": np.array([2], dtype=np.int64),
+                       "eps": np.array(1e-6, dtype=np.float32),
+                       "gamma": f32(16)}, opset=18)
     # BERT-style attention block: scores/sqrt(d) + mask -> softmax -> context
     emit("sdpa_pattern",
          [helper.make_node("MatMul", ["q", "kt"], ["s0"]),
