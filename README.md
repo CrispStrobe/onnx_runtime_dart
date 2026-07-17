@@ -31,7 +31,12 @@ float64 weights), the RNN-T decoder/joint (LSTM + Split), and the int8
 conformer encoder (ConvInteger 1-D/2-D + MatMulInteger + Tile; dynamic-quant
 model, so judged by the intrinsic-band criterion — our deviation from
 ORT-int8, cosine 0.997, is far below that export's own quantization error vs
-fp32, cosine 0.63). Also verified: the **CosyVoice3 speech tokenizer**
+fp32, cosine 0.63). Also: **SSD-MobileNetV1** end to end — uint8 image in,
+TF-converted preprocessing `Loop`, backbone, and the per-class NMS
+while-loop (`TopK` + `NonZero` + `NonMaxSuppression`) — with **all four
+detection outputs bit-identical to ORT**; **Ultraface** face detection,
+**fast-neural-style candy** (InstanceNorm + `Upsample`),
+**sub-pixel CNN super-resolution** and **emotion-ferplus**. Also verified: the **CosyVoice3 speech tokenizer**
 (all 25 discrete speech tokens exactly equal to ORT's) and the
 **llama-nemotron-rerank-1B int4** reranker (logit within 1.7e-5).
 
@@ -139,7 +144,10 @@ self-contained, runnable graph built with the protobuf types.
   `initial_h`/`initial_c`; default activations only.
 - **Control flow / misc:** `If`, `Loop`, `Scan` (subgraphs capture the outer
   scope; scan outputs, non-default axes and reverse directions supported),
-  `Identity`, `Pad` (constant / reflect / edge), `Size`.
+  `Identity`, `Pad` (constant / reflect / edge), `Size`, `Tile`, `Trilu`,
+  `ScatterND`, `Split`, `NonZero`, `TopK`, `NonMaxSuppression`, `Upsample`
+  (deprecated pre-Resize form), `Dropout` (inference identity), `STFT`,
+  `Floor`, `Ceil`, `Round`.
 - **Quantization:** QDQ format — `QuantizeLinear`, `DequantizeLinear`
   (per-tensor + per-axis, uint8/int8), `DynamicQuantizeLinear`; weight
   `DequantizeLinear` nodes constant-fold at load, so QDQ models run at float

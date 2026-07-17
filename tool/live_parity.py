@@ -42,7 +42,9 @@ def main():
                 if any(t in dl for t in ("height", "width", "frame", "seq",
                                          "time", "len")):
                     return seq
-            return seq if i == nd - 1 else 1
+            # Rank-4 tensors are image-like: interior dynamic dims are
+            # spatial, not batch.
+            return seq if (i == nd - 1 or nd == 4) else 1
         dims = [resolve(i, d) for i, d in enumerate(inp.shape)]
         if inp.name == "sr":  # sample-rate scalar (VAD-style audio models)
             feed[inp.name] = np.array(16000, dtype=np.int64)
@@ -55,6 +57,10 @@ def main():
         elif "elo" in inp.name.lower():  # rating conditioning (maia-style)
             it = np.int32 if inp.type == "tensor(int32)" else np.int64
             feed[inp.name] = np.full(dims, 1500, dtype=it)
+        elif inp.type == "tensor(uint8)":  # raw image bytes
+            n = int(np.prod(dims))
+            feed[inp.name] = ((np.arange(n) * 37) % 256).reshape(dims).astype(
+                np.uint8)
         elif inp.type == "tensor(int32)":
             n = int(np.prod(dims))
             feed[inp.name] = ((np.arange(n) * 37) % 97).reshape(dims).astype(

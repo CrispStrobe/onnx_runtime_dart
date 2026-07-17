@@ -274,6 +274,45 @@ def main():
     emit("hardswish",
          [helper.make_node("HardSwish", ["x"], ["out0"])],
          {"x": f32(3, 4, 5)})
+    emit("clip_attr_form",  # opset-6 Clip: min/max as attributes (Relu6)
+         [helper.make_node("Clip", ["x"], ["out0"], min=0.0, max=6.0)],
+         {"x": (f32(3, 7) * 5)}, opset=9)
+    emit("transpose_default_perm",
+         [helper.make_node("Transpose", ["x"], ["out0"])],
+         {"x": f32(2, 3, 4)})
+    emit("nonzero",
+         [helper.make_node("NonZero", ["x"], ["out0"])],
+         {}, initializers={"x": (RNG.integers(0, 3, (3, 5)) - 1).astype(
+             np.float32)})
+    emit("topk_largest",
+         [helper.make_node("TopK", ["x", "k"], ["out0", "out1"], axis=-1)],
+         {"x": f32(2, 3, 9)},
+         initializers={"k": np.array([4], dtype=np.int64)}, n_outputs=2)
+    emit("topk_smallest_axis0",
+         [helper.make_node("TopK", ["x", "k"], ["out0", "out1"], axis=0,
+                           largest=0)],
+         {"x": f32(7, 4)},
+         initializers={"k": np.array([3], dtype=np.int64)}, n_outputs=2)
+    boxes = np.array([[[0, 0, 1, 1], [0, 0.05, 1, 1.05], [0, 2, 1, 3],
+                       [0, 2.05, 1, 3.05], [5, 5, 6, 6]]], dtype=np.float32)
+    nms_scores = np.array([[[0.9, 0.8, 0.7, 0.95, 0.3],
+                            [0.1, 0.85, 0.6, 0.2, 0.75]]], dtype=np.float32)
+    emit("nms_corners",
+         [helper.make_node("NonMaxSuppression",
+                           ["b", "s", "mx", "iou", "sc"], ["out0"])],
+         {},
+         initializers={"b": boxes, "s": nms_scores,
+                       "mx": np.array([3], dtype=np.int64),
+                       "iou": np.array([0.5], dtype=np.float32),
+                       "sc": np.array([0.2], dtype=np.float32)})
+    emit("nms_center",
+         [helper.make_node("NonMaxSuppression", ["b", "s", "mx", "iou"],
+                           ["out0"], center_point_box=1)],
+         {},
+         initializers={"b": np.abs(f32(1, 6, 4)) + 0.5,
+                       "s": np.abs(f32(1, 1, 6)),
+                       "mx": np.array([4], dtype=np.int64),
+                       "iou": np.array([0.4], dtype=np.float32)})
     emit("trilu_upper",
          [helper.make_node("Trilu", ["x"], ["out0"])],
          {"x": f32(2, 4, 5)})

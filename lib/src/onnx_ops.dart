@@ -1502,6 +1502,142 @@ Tensor opWhere(Tensor cond, Tensor a, Tensor b) {
 /// `Size` — total element count as an int64 scalar.
 Tensor opSize(Tensor x) => Tensor.scalarInt(x.length);
 
+/// `NonZero` — indices of nonzero elements as `[rank, count]` int64,
+/// scanning in row-major order.
+Tensor opNonZero(Tensor x) {
+  final rank = math.max(x.rank, 1);
+  final hits = <int>[];
+  for (int k = 0; k < x.length; k++) {
+    if (x.getD(k) != 0) hits.add(k);
+  }
+  final strides = x.strides;
+  final out = Int64List(rank * hits.length);
+  for (int j = 0; j < hits.length; j++) {
+    int rem = hits[j];
+    for (int a = 0; a < x.rank; a++) {
+      out[a * hits.length + j] = rem ~/ strides[a];
+      rem %= strides[a];
+    }
+  }
+  return Tensor.int64(out, [rank, hits.length]);
+}
+
+/// `TopK` — the [k] largest (or smallest) values along [axis], sorted, with
+/// ties broken toward the lower index. Returns `[values, indices]`.
+List<Tensor> opTopK(Tensor x, int k, {int axis = -1, bool largest = true}) {
+  final ax = axis < 0 ? axis + x.rank : axis;
+  final dim = x.shape[ax];
+  // Computed from the shape, not by division — TopK over an empty axis
+  // (zero candidates after a filter) is legal and returns empty outputs.
+  int outer = 1, inner = 1;
+  for (int a = 0; a < ax; a++) {
+    outer *= x.shape[a];
+  }
+  for (int a = ax + 1; a < x.rank; a++) {
+    inner *= x.shape[a];
+  }
+  final outShape = [...x.shape]..[ax] = k;
+  final values = Float32List(outer * k * inner);
+  final indices = Int64List(outer * k * inner);
+  final order = List<int>.generate(dim, (i) => i);
+  for (int o = 0; o < outer; o++) {
+    for (int i = 0; i < inner; i++) {
+      final base = o * dim * inner + i;
+      for (int d = 0; d < dim; d++) {
+        order[d] = d;
+      }
+      order.sort((p, q) {
+        final vp = x.getD(base + p * inner), vq = x.getD(base + q * inner);
+        if (vp != vq) return largest ? vq.compareTo(vp) : vp.compareTo(vq);
+        return p.compareTo(q);
+      });
+      final outBase = o * k * inner + i;
+      for (int d = 0; d < k; d++) {
+        values[outBase + d * inner] = x.getD(base + order[d] * inner);
+        indices[outBase + d * inner] = order[d];
+      }
+    }
+  }
+  final vT = Tensor.float(values, outShape);
+  return [
+    x.isFloat ? vT : Tensor.int64(Int64List.fromList([for (final v in values) v.toInt()]), outShape),
+    Tensor.int64(indices, outShape),
+  ];
+}
+
+/// `NonMaxSuppression` — greedy per-(batch, class) suppression. Returns
+/// `[num_selected, 3]` int64 rows of (batch, class, boxIndex), in
+/// batch-major, class-major, descending-score order (matching ORT).
+Tensor opNonMaxSuppression(Tensor boxes, Tensor scores,
+    {int maxOutputBoxesPerClass = 0,
+    double iouThreshold = 0,
+    double? scoreThreshold,
+    bool centerPointBox = false}) {
+  final nBatch = boxes.shape[0], nBox = boxes.shape[1];
+  final nClass = scores.shape[1];
+  final bf = boxes.asFloatList(), sf = scores.asFloatList();
+  final selected = <int>[];
+  if (maxOutputBoxesPerClass > 0) {
+    // Corner coords may come in either order; normalize with min/max.
+    (double, double, double, double) corners(int b, int i) {
+      final o = (b * nBox + i) * 4;
+      if (centerPointBox) {
+        final cx = bf[o], cy = bf[o + 1], w = bf[o + 2], h = bf[o + 3];
+        return (cy - h / 2, cx - w / 2, cy + h / 2, cx + w / 2);
+      }
+      final y1 = math.min(bf[o], bf[o + 2]);
+      final y2 = math.max(bf[o], bf[o + 2]);
+      final x1 = math.min(bf[o + 1], bf[o + 3]);
+      final x2 = math.max(bf[o + 1], bf[o + 3]);
+      return (y1, x1, y2, x2);
+    }
+
+    double iou(int b, int i, int j) {
+      final (iy1, ix1, iy2, ix2) = corners(b, i);
+      final (jy1, jx1, jy2, jx2) = corners(b, j);
+      final w = math.min(ix2, jx2) - math.max(ix1, jx1);
+      final h = math.min(iy2, jy2) - math.max(iy1, jy1);
+      if (w <= 0 || h <= 0) return 0;
+      final inter = w * h;
+      final areaI = (ix2 - ix1) * (iy2 - iy1);
+      final areaJ = (jx2 - jx1) * (jy2 - jy1);
+      return inter / (areaI + areaJ - inter);
+    }
+
+    final order = List<int>.generate(nBox, (i) => i);
+    for (int b = 0; b < nBatch; b++) {
+      for (int c = 0; c < nClass; c++) {
+        final sBase = (b * nClass + c) * nBox;
+        for (int i = 0; i < nBox; i++) {
+          order[i] = i;
+        }
+        order.sort((p, q) {
+          final d = sf[sBase + q].compareTo(sf[sBase + p]);
+          return d != 0 ? d : p.compareTo(q);
+        });
+        final picked = <int>[];
+        for (final cand in order) {
+          if (picked.length >= maxOutputBoxesPerClass) break;
+          final s = sf[sBase + cand];
+          if (scoreThreshold != null && s <= scoreThreshold) break;
+          var keep = true;
+          for (final p in picked) {
+            if (iou(b, p, cand) > iouThreshold) {
+              keep = false;
+              break;
+            }
+          }
+          if (keep) {
+            picked.add(cand);
+            selected.addAll([b, c, cand]);
+          }
+        }
+      }
+    }
+  }
+  return Tensor.int64(Int64List.fromList(selected), [selected.length ~/ 3, 3]);
+}
+
 /// `Trilu` — keeps the upper (or lower) triangle of the last two dims,
 /// zeroing the rest; [k] shifts the diagonal.
 Tensor opTrilu(Tensor x, {bool upper = true, int k = 0}) {

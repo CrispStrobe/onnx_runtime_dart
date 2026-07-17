@@ -712,9 +712,17 @@ class OnnxGraphExecutor {
       case 'Erf':
         return [ops.opErf(need(0))];
       case 'Clip':
+        // Opset 11+ takes min/max as inputs; opset 6-10 as attributes.
+        final minAttr = attrs.getFloat('min'), maxAttr = attrs.getFloat('max');
         return [
-          ops.opClip(need(0), ins.length > 1 ? ins[1] : null,
-              ins.length > 2 ? ins[2] : null)
+          ops.opClip(
+              need(0),
+              ins.length > 1 && ins[1] != null
+                  ? ins[1]
+                  : (minAttr != null ? Tensor.scalarFloat(minAttr) : null),
+              ins.length > 2 && ins[2] != null
+                  ? ins[2]
+                  : (maxAttr != null ? Tensor.scalarFloat(maxAttr) : null))
         ];
       case 'Cast':
         return [ops.opCast(need(0), attrs.getInt('to')!)];
@@ -726,7 +734,13 @@ class OnnxGraphExecutor {
       case 'Reshape':
         return [ops.opReshape(need(0), need(1))];
       case 'Transpose':
-        return [ops.opTranspose(need(0), attrs.getInts('perm')!)];
+        // perm is optional: default reverses all axes.
+        return [
+          ops.opTranspose(
+              need(0),
+              attrs.getInts('perm') ??
+                  List.generate(need(0).rank, (k) => need(0).rank - 1 - k))
+        ];
       case 'Squeeze':
         return [
           ops.opSqueeze(
@@ -1024,6 +1038,28 @@ class OnnxGraphExecutor {
         ];
       case 'Flatten':
         return [nn.opFlatten(need(0), attrs.getInt('axis') ?? 1)];
+      case 'Upsample':
+        // Deprecated pre-Resize op (opset <= 9): asymmetric coordinates,
+        // floor rounding — exactly Resize-10's semantics.
+        return [
+          nn.opResize(
+            need(0),
+            scales: ins.length > 1 && ins[1] != null
+                ? ins[1]!.asFloatList().toList()
+                : attrs.getFloats('scales'),
+            mode: attrs.getString('mode') ?? 'nearest',
+            coordMode: 'asymmetric',
+            nearestMode: 'floor',
+          )
+        ];
+      case 'Dropout':
+        // Inference: identity; the optional mask output is all-true.
+        return [
+          need(0),
+          if (node.output.length > 1 && node.output[1].isNotEmpty)
+            Tensor.int64(Int64List(need(0).length)..fillRange(0, need(0).length, 1),
+                need(0).shape),
+        ];
       case 'LeakyRelu':
         return [ops.opLeakyRelu(need(0), attrs.getFloat('alpha') ?? 0.01)];
       case 'Elu':
@@ -1054,6 +1090,26 @@ class OnnxGraphExecutor {
         return [ops.opSize(need(0))];
       case 'Tile':
         return [ops.opTile(need(0), need(1).asIntList().toList())];
+      case 'NonZero':
+        return [ops.opNonZero(need(0))];
+      case 'TopK':
+        return ops.opTopK(need(0), need(1).getI(0),
+            axis: attrs.getInt('axis') ?? -1,
+            largest: (attrs.getInt('largest') ?? 1) != 0);
+      case 'NonMaxSuppression':
+        return [
+          ops.opNonMaxSuppression(
+            need(0),
+            need(1),
+            maxOutputBoxesPerClass:
+                ins.length > 2 && ins[2] != null ? ins[2]!.getI(0) : 0,
+            iouThreshold:
+                ins.length > 3 && ins[3] != null ? ins[3]!.getD(0) : 0,
+            scoreThreshold:
+                ins.length > 4 && ins[4] != null ? ins[4]!.getD(0) : null,
+            centerPointBox: (attrs.getInt('center_point_box') ?? 0) != 0,
+          )
+        ];
       case 'Trilu':
         return [
           ops.opTrilu(need(0),
@@ -1215,6 +1271,9 @@ class _AttrMap {
       _byName.containsKey(name) ? String.fromCharCodes(_byName[name]!.s) : null;
   List<int>? getInts(String name) => _byName.containsKey(name)
       ? _byName[name]!.ints.map((v) => v.toInt()).toList()
+      : null;
+  List<double>? getFloats(String name) => _byName.containsKey(name)
+      ? _byName[name]!.floats.toList()
       : null;
   List<String>? getStrings(String name) => _byName.containsKey(name)
       ? _byName[name]!
