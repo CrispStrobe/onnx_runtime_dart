@@ -28,7 +28,16 @@ float64 weights), the RNN-T decoder/joint (LSTM + Split), and the int8
 conformer encoder (ConvInteger 1-D/2-D + MatMulInteger + Tile; dynamic-quant
 model, so judged by the intrinsic-band criterion — our deviation from
 ORT-int8, cosine 0.997, is far below that export's own quantization error vs
-fp32, cosine 0.63).
+fp32, cosine 0.63). Also verified: the **CosyVoice3 speech tokenizer**
+(all 25 discrete speech tokens exactly equal to ORT's) and the
+**llama-nemotron-rerank-1B int4** reranker (logit within 1.7e-5).
+
+One known precision-mode gap: exports that run regions in **fp16 compute**
+(115 `Cast`-to-fp16 pairs in `zerank-1-small` int4) execute here in float32
+between the cast points (values are rounded through fp16 *at* each cast).
+ORT computes those ops in true half precision, so results agree only to the
+model's fp16 sensitivity (~2% on zerank's score) — ours is the more precise
+of the two, but not bit-matching.
 Every op is additionally covered by generated per-op parity fixtures against
 native ONNX Runtime (`test/fixtures/`, see `tool/gen_fixtures.py`).
 

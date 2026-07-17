@@ -44,6 +44,33 @@ int halfToFloat32Bits(int h) {
   return sign | ((exp - 15 + 127) << 23) | (mant << 13);
 }
 
+/// Compresses a float32 bit pattern to the nearest half-precision bit
+/// pattern (round to nearest, ties to even) — the inverse of
+/// [halfToFloat32Bits], used by `Cast(to: FLOAT16)` to reproduce fp16
+/// rounding semantics.
+int float32ToHalfBits(int f) {
+  final sign = (f >> 16) & 0x8000;
+  final exp = (f >> 23) & 0xFF;
+  var mant = f & 0x7FFFFF;
+  if (exp == 0xFF) return sign | 0x7C00 | (mant != 0 ? 0x200 : 0); // inf/nan
+  final e = exp - 127 + 15;
+  if (e >= 0x1F) return sign | 0x7C00; // overflow -> inf
+  if (e <= 0) {
+    if (e < -10) return sign; // underflow -> signed zero
+    mant |= 0x800000;
+    final shift = 14 - e;
+    var half = mant >> shift;
+    final rem = mant & ((1 << shift) - 1);
+    final halfway = 1 << (shift - 1);
+    if (rem > halfway || (rem == halfway && (half & 1) != 0)) half++;
+    return sign | half;
+  }
+  var half = (e << 10) | (mant >> 13);
+  final rem = mant & 0x1FFF;
+  if (rem > 0x1000 || (rem == 0x1000 && (half & 1) != 0)) half++;
+  return sign | half; // mantissa carry rolls into the exponent correctly
+}
+
 /// Reads the bytes for an external-data weight: `(location, offset, length)`
 /// from a companion file. See [OnnxModel.fromFile].
 typedef ExternalDataResolver = Uint8List Function(

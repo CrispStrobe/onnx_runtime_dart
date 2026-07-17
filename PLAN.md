@@ -17,7 +17,13 @@
 > (Floor/Ceil/Round, Tile, 1-D ConvInteger; within intrinsic dynamic-quant
 > band — and that export is itself lossy: int8-vs-fp32 cosine 0.63).
 > Register-blocked GEMM microkernel landed; quiet-machine re-measure
-> pending. v0.3.0 tagged and published. Numbers in `BENCHMARKS.md`;
+> pending. v0.3.0 tagged (pub.dev publish needs Automated Publishing
+> enabled on the package admin page, then rerun the workflow). Gemm pool
+> fan-out ✅. Correctness fixes from new-model sweeps: integer Div now
+> truncates toward zero (was rounding — off-by-one on length arithmetic);
+> Cast(FLOAT16) rounds through half precision. New verified: nemotron-int4,
+> CosyVoice3 speech tokenizer (exact); zerank-int4 documented as fp16-compute
+> export (README). Numbers in `BENCHMARKS.md`;
 > per-op ORT parity fixtures in `test/fixtures/` (`tool/gen_fixtures.py`),
 > live-model parity via `tool/live_parity.py|dart`.
 

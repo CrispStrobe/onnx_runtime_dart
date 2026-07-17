@@ -320,6 +320,18 @@ class OnnxGraphExecutor {
         if (t == null || !t.isFloat || t.rank != 2) continue;
         if (t.length < minWeightElements) continue;
         toPartition[name] = (t.f!, t.shape[0], t.shape[1]);
+      } else if (node.opType == 'Gemm' && node.input.length >= 2) {
+        // Partition Gemm's B in its effective (possibly transposed)
+        // orientation, keyed so the runAsync path can find it; alpha/beta/
+        // bias/transA stay on the main isolate.
+        final name = node.input[1];
+        final t = _initializers[name];
+        if (t == null || !t.isFloat || t.rank != 2) continue;
+        if (t.length < minWeightElements) continue;
+        final transB =
+            (_AttrMap(node.attribute).getInt('transB') ?? 0) != 0;
+        final b = transB ? ops.opTranspose(t, [1, 0]) : t;
+        toPartition['gemm:$name'] = (b.f!, b.shape[0], b.shape[1]);
       } else if (node.opType == 'Conv' && node.input.length >= 2) {
         final w = _initializers[node.input[1]];
         if (w == null || !w.isFloat || w.rank != 4) continue;
@@ -362,6 +374,9 @@ class OnnxGraphExecutor {
             ? pool.weights[node.input[1]]
             : null;
         final a = part == null ? null : ins[0];
+        final gemmPart = pool != null && node.opType == 'Gemm'
+            ? pool.weights['gemm:${node.input[1]}']
+            : null;
         final convX = pool != null &&
                 node.opType == 'Conv' &&
                 pool.convWeights.contains(node.input[1])
@@ -378,6 +393,31 @@ class OnnxGraphExecutor {
           outs = [
             Tensor.float(out, [...a.shape.sublist(0, a.rank - 1), part.n])
           ];
+        } else if (gemmPart != null &&
+            ins[0] != null &&
+            ins[0]!.isFloat &&
+            ins[0]!.rank == 2 &&
+            (attrs.getInt('transA') ?? 0) == 0 &&
+            ins[0]!.shape[1] == gemmPart.k &&
+            ins[0]!.shape[0] >= _minPoolRows) {
+          final aG = ins[0]!;
+          final m = aG.shape[0];
+          final raw =
+              await pool!.matmul('gemm:${node.input[1]}', aG.f!, m);
+          var y = Tensor.float(raw, [m, gemmPart.n]);
+          final alpha = attrs.getFloat('alpha') ?? 1.0;
+          if (alpha != 1.0) {
+            for (int idx = 0; idx < y.f!.length; idx++) {
+              y.f![idx] *= alpha;
+            }
+          }
+          final c = ins.length > 2 ? ins[2] : null;
+          if (c != null) {
+            final beta = attrs.getFloat('beta') ?? 1.0;
+            y = ops.opAdd(
+                y, beta == 1.0 ? c : ops.opMul(c, Tensor.scalarFloat(beta)));
+          }
+          outs = [y];
         } else if (convX != null && convX.isFloat && convX.rank == 4) {
           final attrsC = attrs;
           final w = _initializers[node.input[1]]!;

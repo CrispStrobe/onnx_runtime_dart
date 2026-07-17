@@ -1,0 +1,1 @@
+{"inputs": {}, "expected": {"out0": {"dtype": "int64", "shape": [6], "data": [25, -25, 3, -3, 0, 1]}}}

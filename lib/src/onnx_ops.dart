@@ -12,6 +12,7 @@ import 'dart:typed_data';
 // SSE/NEON); portable scalar kernel on web targets where it's emulated.
 import 'gemm_kernel_scalar.dart' if (dart.library.ffi) 'gemm_kernel_simd.dart'
     as gemm;
+import 'onnx_proto_loader.dart' show float32ToHalfBits, halfToFloat32Bits;
 import 'tensor.dart';
 
 // ---------------------------------------------------------------------------
@@ -388,9 +389,28 @@ Tensor opSub(Tensor a, Tensor b) =>
 Tensor opMul(Tensor a, Tensor b) =>
     _arithFloatFast(a, b, _Arith.mul) ??
     _elementwiseBinary(a, b, (x, y) => x * y);
-Tensor opDiv(Tensor a, Tensor b) =>
-    _arithFloatFast(a, b, _Arith.div) ??
-    _elementwiseBinary(a, b, (x, y) => x / y);
+Tensor opDiv(Tensor a, Tensor b) {
+  // Integer division truncates toward zero per the ONNX spec (the generic
+  // path would round the float quotient — off by one on length arithmetic
+  // like ceil-div chains).
+  if (!a.isFloat && !b.isFloat) {
+    if (_shapeEq(a.shape, b.shape) || (b.length == 1 && a.rank >= b.rank)) {
+      final n = a.length;
+      final ai = a.intData, bi = b.intData;
+      final scalar = b.length == 1 ? bi[0] : 0;
+      final out = Int64List(n);
+      for (int k = 0; k < n; k++) {
+        out[k] = ai[k] ~/ (b.length == 1 ? scalar : bi[k]);
+      }
+      return Tensor.int64(out, a.shape);
+    }
+    // General broadcast: divide via coordinates but truncate.
+    final r = _elementwiseBinary(a, b, (x, y) => (x / y).truncateToDouble());
+    return r;
+  }
+  return _arithFloatFast(a, b, _Arith.div) ??
+      _elementwiseBinary(a, b, (x, y) => x / y);
+}
 Tensor opPow(Tensor a, Tensor b) {
   // Scalar exponent (LayerNorm's `(x-mean)^2`, sqrt-as-pow etc.) — direct
   // loop, and plain multiply for the ubiquitous square.
@@ -520,8 +540,9 @@ Tensor opClip(Tensor x, Tensor? min, Tensor? max) {
 // ---------------------------------------------------------------------------
 
 Tensor opCast(Tensor x, int to) {
-  // ONNX TensorProto.DataType: 1=FLOAT, 6=INT32, 7=INT64, 9=BOOL, 11=DOUBLE.
-  // We carry both int32 and int64 as our int64 tensor, and bool as int64 0/1.
+  // ONNX TensorProto.DataType: 1=FLOAT, 6=INT32, 7=INT64, 9=BOOL,
+  // 10=FLOAT16, 11=DOUBLE. int32/int64 share our int64 tensor, bool is
+  // int64 0/1, double is carried as float32.
   if (to == 9) {
     final n = x.length;
     final out = Int64List(n);
@@ -531,6 +552,19 @@ Tensor opCast(Tensor x, int to) {
     return Tensor.int64(out, x.shape);
   }
   if (to == 6 || to == 7) return Tensor.int64(x.asIntList(), x.shape);
+  if (to == 10) {
+    // fp16: values must round through half precision (fp16-casting exports
+    // depend on it; treating this as identity drifts vs ORT), even though
+    // the result is carried in a float32 tensor.
+    final src = x.asFloatList();
+    final out = Float32List(src.length);
+    final bits = out.buffer.asUint32List();
+    final srcBits = src.buffer.asUint32List(src.offsetInBytes, src.length);
+    for (int k = 0; k < src.length; k++) {
+      bits[k] = halfToFloat32Bits(float32ToHalfBits(srcBits[k]));
+    }
+    return Tensor.float(out, x.shape);
+  }
   return Tensor.float(x.asFloatList(), x.shape);
 }
 

@@ -274,6 +274,17 @@ def main():
     emit("hardswish",
          [helper.make_node("HardSwish", ["x"], ["out0"])],
          {"x": f32(3, 4, 5)})
+    emit("div_int64_truncates",
+         [helper.make_node("Div", ["a", "b"], ["out0"])],
+         {},
+         initializers={"a": np.array([103, -103, 7, -7, 99, 100],
+                                     dtype=np.int64),
+                       "b": np.array([4, 4, 2, 2, 100, 100],
+                                     dtype=np.int64)})
+    emit("cast_fp16_roundtrip",
+         [helper.make_node("Cast", ["x"], ["h"], to=TensorProto.FLOAT16),
+          helper.make_node("Cast", ["h"], ["out0"], to=TensorProto.FLOAT)],
+         {"x": (f32(3, 7) * 100)})
     emit("tile",
          [helper.make_node("Tile", ["x", "rep"], ["out0"])],
          {"x": f32(2, 3, 4)},

@@ -99,6 +99,47 @@ void main() {
     }
   });
 
+  test('pooled Gemm fan-out == sync Gemm, bitwise', () async {
+    final g = GraphProto()
+      ..input.add(ValueInfoProto()..name = 'X')
+      ..output.add(ValueInfoProto()..name = 'Y')
+      ..initializer.addAll([
+        _floatInit('W', [64, 96]), // transB: effective B is W^T [96, 64]
+        _floatInit('C', [64]),
+      ])
+      ..node.add(NodeProto()
+        ..opType = 'Gemm'
+        ..input.addAll(['X', 'W', 'C'])
+        ..output.add('Y')
+        ..attribute.addAll([
+          AttributeProto()
+            ..name = 'transB'
+            ..i = Int64(1),
+          AttributeProto()
+            ..name = 'alpha'
+            ..f = 2.0,
+          AttributeProto()
+            ..name = 'beta'
+            ..f = 0.5,
+        ]));
+    final model =
+        OnnxModel.fromBytes((ModelProto()..graph = g).writeToBuffer());
+    final x = Tensor.float(
+        Float32List.fromList(
+            List.generate(8 * 96, (_) => _rng.nextDouble() * 2 - 1)),
+        [8, 96]);
+    final want = model.run({'X': x}, ['Y'])['Y']!;
+    await model.parallelize(workers: 3, minWeightElements: 1000);
+    try {
+      final got = (await model.runAsync({'X': x}, ['Y']))['Y']!;
+      expect(got.shape, want.shape);
+      expect(got.asFloatList(), want.asFloatList(),
+          reason: 'pooled Gemm must be bitwise-identical');
+    } finally {
+      model.dispose();
+    }
+  });
+
   test('pooled conv fan-out == sync conv, bitwise', () async {
     final g = GraphProto()
       ..input.add(ValueInfoProto()..name = 'X')
