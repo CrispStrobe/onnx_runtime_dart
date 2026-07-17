@@ -1,6 +1,23 @@
 # Changelog
 
-## 0.3.0
+## 0.3.1
+
+- **Correctness:** integer `Div` now truncates toward zero per the ONNX spec
+  (previously the float quotient was rounded — off-by-one on ceil-div length
+  arithmetic); `Cast(to: FLOAT16)` rounds values through half precision
+  (ties-to-even) instead of passing them through unchanged.
+- Register-blocked 4×8 SIMD GEMM microkernel (accumulator tile in locals):
+  ResNet18 422 → 332 ms, MobileNetV2 260 → 230 ms; MiniLM-L6 with the
+  4-worker isolate pool: 32.6 ms — 2.0× off single-threaded native ORT.
+- `Gemm` weights join the isolate-pool column partitioning (bitwise-identical
+  results, transB pre-transposed at `parallelize`).
+- New ops: `Tile`, `Floor`, `Ceil`, `Round`; 1-D `ConvInteger`.
+- Newly verified live vs native ORT: Parakeet-TDT int8 conformer encoder,
+  CosyVoice3 speech tokenizer (discrete tokens exactly equal),
+  llama-nemotron-rerank-1B int4; zerank-1-small int4 runs with a documented
+  fp16-compute precision caveat (see README).
+
+## 0.3.0 (not published)
 
 Major expansion: CNNs, recurrent models, control flow, quantization (all
 formats), audio front-ends, ~7-18x faster execution, and opt-in isolate
