@@ -85,7 +85,18 @@ class Tensor {
 
   double getD(int flatIdx) =>
       isFloat ? f![flatIdx] : intData[flatIdx].toDouble();
-  int getI(int flatIdx) => isFloat ? f![flatIdx].toInt() : intData[flatIdx];
+  int getI(int flatIdx) =>
+      isFloat ? _floatToInt(f![flatIdx]) : intData[flatIdx];
+
+  /// Float -> int with saturation for non-finite values (matching ORT's
+  /// ARM Cast semantics: +-inf saturate, NaN -> 0) — Dart's toInt() throws.
+  static int _floatToInt(double v) {
+    if (v.isNaN) return 0;
+    if (v.isInfinite) {
+      return v > 0 ? 0x7FFFFFFFFFFFFFFF : -0x8000000000000000;
+    }
+    return v.toInt();
+  }
 
   List<int> get strides {
     final s = List<int>.filled(shape.length, 1);
@@ -120,7 +131,7 @@ class Tensor {
     }
     final out = Int64List(f!.length);
     for (int k = 0; k < f!.length; k++) {
-      out[k] = f![k].toInt();
+      out[k] = _floatToInt(f![k]);
     }
     return out;
   }

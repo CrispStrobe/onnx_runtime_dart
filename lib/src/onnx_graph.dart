@@ -1240,6 +1240,8 @@ class OnnxGraphExecutor {
         return [ops.opHardSwish(need(0))];
       case 'Softplus':
         return [ops.opSoftplus(need(0))];
+      case 'Sign':
+        return [ops.opSign(need(0))];
       case 'Floor':
         return [ops.opFloor(need(0))];
       case 'Ceil':

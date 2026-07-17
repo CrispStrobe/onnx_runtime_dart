@@ -452,6 +452,13 @@ def main():
           helper.make_node("Round", ["x"], ["r"]),
           helper.make_node("Concat", ["f", "c", "r"], ["out0"], axis=0)],
          {"x": (f32(2, 6) * 3)})
+    emit("sign_float_int",
+         [helper.make_node("Sign", ["x"], ["f"]),
+          helper.make_node("Sign", ["xi"], ["i_"]),
+          helper.make_node("Cast", ["i_"], ["fi"], to=TensorProto.FLOAT),
+          helper.make_node("Concat", ["f", "fi"], ["out0"], axis=0)],
+         {"x": (f32(5) * 3)},
+         initializers={"xi": np.array([-7, 0, 7, -1, 2], dtype=np.int64)})
     emit("softplus",
          [helper.make_node("Softplus", ["x"], ["out0"])],
          {"x": f32(3, 4, 5)})

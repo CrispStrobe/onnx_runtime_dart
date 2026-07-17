@@ -43,6 +43,14 @@ and the **TAESD tiny Stable-Diffusion VAE decoder** (latent [1,4,64,64] ->
 (all 25 discrete speech tokens exactly equal to ORT's) and the
 **llama-nemotron-rerank-1B int4** reranker (logit within 1.7e-5).
 
+The small-embedder sweep across the CrispEmbed registry's architectures all
+verifies at cosine-1.0 too: **MPNet** (all-mpnet-base-v2, relative-position
+buckets), **GTE-v1.5** (pre-LN + RoPE + GeGLU), **ModernBERT**
+(gte-modernbert-base, global/local sliding-window attention),
+**NomicBERT** (nomic-embed-text-v1.5), **DeBERTa-v2**
+(mxbai-rerank-xsmall, disentangled attention), **SPLADE**
+(sparse lexical), arctic-embed-xs and multilingual-e5-small.
+
 One known precision-mode gap: exports that run regions in **fp16 compute**
 (115 `Cast`-to-fp16 pairs in `zerank-1-small` int4) execute here in float32
 between the cast points (values are rounded through fp16 *at* each cast).
@@ -126,7 +134,8 @@ self-contained, runnable graph built with the protobuf types.
 ## Supported operators
 
 - **Math:** `Add`, `Sub`, `Mul`, `Div`, `Pow`, `Sqrt`, `Reciprocal`, `Abs`,
-  `Neg`, `Exp`, `Log`, `Relu`, `Erf`, `Sigmoid`, `Tanh`, `Cos`, `Sin`, `Clip`.
+  `Neg`, `Exp`, `Log`, `Relu`, `Erf`, `Sigmoid`, `Tanh`, `Cos`, `Sin`, `Clip`,
+  `Sign`.
 - **Compare / logic:** `Equal`, `Greater`, `Less`, `GreaterOrEqual`,
   `LessOrEqual`, `And`, `Or`, `Not`, `Where`, `Max`, `Min`.
 - **Shape / index:** `Shape`, `Reshape`, `Transpose`, `Squeeze`, `Unsqueeze`,
