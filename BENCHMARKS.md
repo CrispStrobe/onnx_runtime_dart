@@ -13,18 +13,15 @@ Native ORT reference on identical inputs (`onnxruntime` 1.27.0 CPU):
 | 2026-07-17 | B1: monomorphic+suffix-broadcast elementwise, Gemm transB prepack | 518.4 ms | 32× | MatMul 85.5%, ReduceMean 4.7%, Erf 2.7% |
 | 2026-07-17 | B2: packed 4-row Float32x4 SIMD GEMM kernel | 142.5 ms | 8.9× | MatMul 46.9%, ReduceMean 16.9%, Erf 9.5% |
 | 2026-07-17 | B3: constant folding; Transpose/ReduceMean fast paths; row-scalar broadcast (LayerNorm), Pow/Erf direct loops | 107.4 ms | 6.7× | MatMul 84.4%, Erf 6.0%, Add 2.4% |
+| 2026-07-17 | + GELU/SDPA fusion (quiet machine, load ≈ 4) | 66.2 ms | 4.1× | MatMul 83.2%, _FusedGelu 8.0%, _FusedSDPA 3.0% |
+| 2026-07-17 | + isolate pool, 4 workers (`runAsync`, single warmed run) | ≈42 ms | 2.6× | — |
+
+Isolate pool scaling on MiniLM (single warmed run each, bitwise-identical
+outputs): 0 workers ≈ 120 ms, 2 workers ≈ 48 ms, 4 workers ≈ 42 ms.
 
 Caveat: this machine runs other dev workloads; min-of-15-iters is the robust
-number, means can inflate 2–3× under contention.
-
-Pending: the padded-buffer depthwise-conv fast path, the recurrent /
-control-flow additions, and the B4 isolate pool (`parallelize`/`runAsync`)
-all landed while the machine was at load-avg ~70 — their wall-clock impact
-still needs a quiet-machine measurement (parity is verified; Silero VAD runs
-cosine-1.0 incl. LSTM + If + reflect-Pad; pooled MiniLM output is bitwise
-identical to the sync path). Measure with:
-`dart run tool/live_parity.dart <model> <case.json> --workers N` and
-`tool/bench.dart`.
+number, means can inflate 2–3× under contention. Rows above marked "quiet
+machine" were measured at load ≈ 4; the earlier rows at load 10–30.
 
 ## Vision models (224×224, batch 1, cosine-1.0 parity vs ORT throughout)
 
@@ -32,10 +29,11 @@ identical to the sync path). Measure with:
 |---|---|---|---|
 | 2026-07-17 | A1: naive direct conv | 4612 ms | 11520 ms |
 | 2026-07-17 | A2: im2col + SIMD GEMM conv (depthwise stays direct) | 655 ms | 625 ms |
+| 2026-07-17 | + padded-buffer branchless depthwise (quiet machine) | 260 ms | 422 ms |
 
 ORT reference: MobileNetV2 15.4 ms (1-thread) / 5.1 ms (default);
-ResNet18 47.9 ms / 14.9 ms. Gap ≈ 42× / 13× single-threaded — depthwise conv
-(not GEMM-backed) dominates MobileNetV2's remainder.
+ResNet18 47.9 ms / 14.9 ms. Gap ≈ 17× / 8.8× single-threaded; Conv is
+~88% of both profiles.
 
 Per-op shares come from `ExecutionProfile` (`--iters` accumulate). Regenerate
 the ORT reference with the snippet in `git log` for this file or ad-hoc via
