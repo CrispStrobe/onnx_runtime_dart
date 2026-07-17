@@ -9,7 +9,8 @@ It implements the operator set used by **transformer / attention** style models
 **convolution / pooling** family used by CNN vision models, **recurrent** ops
 (`LSTM`/`GRU`/`RNN`) and **control flow** (`If`/`Loop` with subgraph
 execution). It is still not a complete ONNX runtime — notably `Scan`,
-`Einsum` beyond two known patterns, and quantized ops are missing.
+`Einsum` beyond two known patterns, and QOperator-format quantized ops are
+missing (QDQ-format quantized models are supported).
 
 Verified to **cosine-1.0 parity** against ONNX Runtime (via `ort`), max abs diff
 ~1e-6 (float32 rounding), on: `jina-embeddings-v2-base-en` (BERT + ALiBi),
@@ -19,6 +20,12 @@ embedder (external-data weights), the vision CNNs **MobileNetV2** and
 **ResNet18**, and **Silero VAD** (Conv1D + LSTM + `If` + reflect-`Pad`).
 Every op is additionally covered by generated per-op parity fixtures against
 native ONNX Runtime (`test/fixtures/`, see `tool/gen_fixtures.py`).
+
+**Quantized MobileNetV2 (QDQ)** classifies identically to ORT (same top-5, in
+order). Quantized models have no bitwise logit parity to target: tiny
+float-ordering differences flip quantization buckets, and ORT's own optimized
+vs unoptimized execution of the same model only agrees with itself to cosine
+≈0.993 — our output lands in the same band (≈0.991).
 
 Execution uses a packed, register-tiled **`Float32x4` SIMD GEMM kernel** on
 native targets (scalar fallback on web), im2col convolution, load-time
@@ -96,6 +103,11 @@ self-contained, runnable graph built with the protobuf types.
 - **Control flow / misc:** `If`, `Loop` (subgraphs capture the outer scope;
   scan outputs supported), `Identity`, `Pad` (constant / reflect / edge),
   `Size`.
+- **Quantization (QDQ format):** `QuantizeLinear`, `DequantizeLinear`
+  (per-tensor + per-axis, uint8/int8), `DynamicQuantizeLinear`; int8/uint8
+  weights load and dequantize (weight `DequantizeLinear` nodes constant-fold
+  at load, so QDQ models run at float speed). QOperator-format ops
+  (`QLinearConv`, `QLinearMatMul`, `MatMulInteger`) are not implemented.
 
 Tensors are float32 or int64 (int32 and bool are widened to int64), row-major
 (matching ONNX's own layout). An unimplemented op throws `UnsupportedError`

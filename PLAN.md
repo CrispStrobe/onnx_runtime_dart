@@ -5,7 +5,9 @@
 > A1 ✅ A2 ✅ A3 ✅ (LSTM/GRU/RNN; Silero VAD verified) A4 ✅ (If/Loop;
 > Scan open) B4 ✅ (isolate pool: column-partitioned MatMul weights,
 > `parallelize`/`runAsync`, bitwise-equal to sync; Gemm/conv fan-out and
-> speedup measurement still open) · A5 (quantization) open. Depthwise-conv
+> speedup measurement still open) A5 ✅ *QDQ format* (Q/DQ/DynamicQ ops,
+> int8/uint8 weights; quantized MobileNetV2 matches ORT's top-5 — QOperator
+> ops QLinearConv/QLinearMatMul/MatMulInteger still open). Depthwise-conv
 > fast path landed but is not yet benchmarked on a quiet machine. Numbers
 > in `BENCHMARKS.md`; per-op ORT parity fixtures in `test/fixtures/`
 > (`tool/gen_fixtures.py`), live-model parity via `tool/live_parity.py|dart`.

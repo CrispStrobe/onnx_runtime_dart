@@ -1232,6 +1232,92 @@ Tensor opWhere(Tensor cond, Tensor a, Tensor b) {
 /// `Size` — total element count as an int64 scalar.
 Tensor opSize(Tensor x) => Tensor.scalarInt(x.length);
 
+// ---------------------------------------------------------------------------
+// Quantization (QDQ format)
+// ---------------------------------------------------------------------------
+
+/// Round half to even (banker's rounding), as the ONNX quantization ops
+/// require — Dart's `round()` rounds half away from zero.
+int _roundEven(double v) {
+  final f = v.floorToDouble();
+  final frac = v - f;
+  if (frac > 0.5) return f.toInt() + 1;
+  if (frac < 0.5) return f.toInt();
+  final i = f.toInt();
+  return i.isEven ? i : i + 1;
+}
+
+/// Per-axis channel index of flat element [k]: scale/zero-point entry to use
+/// when they are 1-D along [axis].
+int _channelOf(int k, List<int> shape, int axis) {
+  int stride = 1;
+  for (int a = shape.length - 1; a > axis; a--) {
+    stride *= shape[a];
+  }
+  return (k ~/ stride) % shape[axis];
+}
+
+/// `QuantizeLinear`: `y = saturate(roundEven(x / scale) + zeroPoint)`,
+/// per-tensor or per-axis. [lo]/[hi] are the saturation bounds of the output
+/// type (from the zero-point tensor's dtype: uint8 → 0..255, int8 →
+/// -128..127).
+Tensor opQuantizeLinear(Tensor x, Tensor scale, Tensor? zeroPoint,
+    {int axis = 1, required int lo, required int hi}) {
+  final n = x.length;
+  final out = Int64List(n);
+  final perAxis = scale.length > 1;
+  final ax = axis < 0 ? axis + x.rank : axis;
+  final sf = scale.asFloatList();
+  final zp = zeroPoint?.asIntList();
+  for (int k = 0; k < n; k++) {
+    final c = perAxis ? _channelOf(k, x.shape, ax) : 0;
+    final q = _roundEven(x.getD(k) / sf[c]) + (zp == null ? 0 : zp[c]);
+    out[k] = q < lo ? lo : (q > hi ? hi : q);
+  }
+  return Tensor.int64(out, x.shape);
+}
+
+/// `DequantizeLinear`: `y = (x - zeroPoint) * scale`, per-tensor or per-axis.
+Tensor opDequantizeLinear(Tensor x, Tensor scale, Tensor? zeroPoint,
+    {int axis = 1}) {
+  final n = x.length;
+  final out = Float32List(n);
+  final perAxis = scale.length > 1;
+  final ax = axis < 0 ? axis + x.rank : axis;
+  final sf = scale.asFloatList();
+  final zp = zeroPoint?.asIntList();
+  final xi = x.asIntList();
+  for (int k = 0; k < n; k++) {
+    final c = perAxis ? _channelOf(k, x.shape, ax) : 0;
+    out[k] = (xi[k] - (zp == null ? 0 : zp[c])) * sf[c];
+  }
+  return Tensor.float(out, x.shape);
+}
+
+/// `DynamicQuantizeLinear`: computes uint8 scale/zero-point from the data
+/// range (always spanning 0) and quantizes. Returns `[y, scale, zeroPoint]`.
+List<Tensor> opDynamicQuantizeLinear(Tensor x) {
+  final xf = x.asFloatList();
+  double mn = 0, mx = 0; // range must include 0 per spec
+  for (final v in xf) {
+    if (v < mn) mn = v;
+    if (v > mx) mx = v;
+  }
+  final scale = (mx - mn) / 255.0;
+  final zpF = scale == 0 ? 0.0 : -mn / scale;
+  final zp = _roundEven(zpF.clamp(0.0, 255.0));
+  final out = Int64List(xf.length);
+  for (int k = 0; k < xf.length; k++) {
+    final q = scale == 0 ? zp : _roundEven(xf[k] / scale) + zp;
+    out[k] = q < 0 ? 0 : (q > 255 ? 255 : q);
+  }
+  return [
+    Tensor.int64(out, x.shape),
+    Tensor.scalarFloat(scale),
+    Tensor.scalarInt(zp),
+  ];
+}
+
 /// `Pad` — constant / reflect / edge modes over any rank. [pads] is
 /// `[begin_0..begin_r, end_0..end_r]`; with [axes] (opset 18+) it lists only
 /// the entries for those axes, in the same begin-then-end layout.

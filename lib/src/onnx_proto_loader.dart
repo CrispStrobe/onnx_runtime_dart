@@ -14,6 +14,8 @@ import 'tensor.dart';
 // the core; int32 and bool are widened to our int64 tensor (bool as 0/1) since
 // embedding / reranking graphs use them for shapes, indices and masks.
 const int _kFloat = 1;
+const int _kUint8 = 2;
+const int _kInt8 = 3;
 const int _kInt32 = 6;
 const int _kInt64 = 7;
 const int _kBool = 9;
@@ -117,6 +119,20 @@ Tensor tensorFromProto(TensorProto t, {ExternalDataResolver? ext}) {
       outBits[i] = halfToFloat32Bits(src.getUint16(i * 2, Endian.little));
     }
     return Tensor.float(out, shape);
+  } else if (t.dataType == _kUint8 || t.dataType == _kInt8) {
+    // Quantized weights / zero points, widened to int64. int32_data is the
+    // inline carrier for both per the proto spec.
+    if (t.int32Data.isNotEmpty) {
+      return Tensor.int64(Int64List.fromList(t.int32Data), shape);
+    }
+    final bytes = _rawBytes(t, ext);
+    final out = Int64List(n);
+    final signed = t.dataType == _kInt8;
+    for (int i = 0; i < n; i++) {
+      final b = bytes[i];
+      out[i] = signed && b > 127 ? b - 256 : b;
+    }
+    return Tensor.int64(out, shape);
   } else if (t.dataType == _kBool) {
     // BOOL is one byte per element, carried as int64 0/1.
     final bytes = _rawBytes(t, ext);

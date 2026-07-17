@@ -38,6 +38,10 @@ def dtype_of(a: np.ndarray) -> int:
         return TensorProto.FLOAT
     if a.dtype == np.int32:
         return TensorProto.INT32
+    if a.dtype == np.uint8:
+        return TensorProto.UINT8
+    if a.dtype == np.int8:
+        return TensorProto.INT8
     return TensorProto.INT64
 
 
@@ -359,6 +363,58 @@ def main():
     pad("pad_axes", f32(2, 3, 4), [2, 1], axes=[-1], opset=18)
     emit("size_op", [helper.make_node("Size", ["x"], ["out0"])],
          {"x": f32(2, 3, 4)})
+
+    # ---- A5: QDQ quantization ----
+    emit("quantizelinear_uint8",
+         [helper.make_node("QuantizeLinear", ["x", "s", "z"], ["out0"])],
+         {"x": f32(2, 3, 4) * 5},
+         initializers={"s": np.array(0.05, dtype=np.float32),
+                       "z": np.array(128, dtype=np.uint8)})
+    emit("quantizelinear_int8",
+         [helper.make_node("QuantizeLinear", ["x", "s", "z"], ["out0"])],
+         {"x": f32(2, 3, 4) * 5},
+         initializers={"s": np.array(0.05, dtype=np.float32),
+                       "z": np.array(-10, dtype=np.int8)})
+    emit("quantizelinear_peraxis",
+         [helper.make_node("QuantizeLinear", ["x", "s", "z"], ["out0"],
+                           axis=1)],
+         {"x": f32(2, 3, 4) * 5},
+         initializers={"s": np.array([0.02, 0.05, 0.1], dtype=np.float32),
+                       "z": np.array([0, 10, 128], dtype=np.uint8)})
+    emit("dequantizelinear_uint8",
+         [helper.make_node("DequantizeLinear", ["x", "s", "z"], ["out0"])],
+         {},
+         initializers={"x": RNG.integers(0, 256, (2, 3, 4)).astype(np.uint8),
+                       "s": np.array(0.05, dtype=np.float32),
+                       "z": np.array(128, dtype=np.uint8)})
+    emit("dequantizelinear_int8_peraxis",
+         [helper.make_node("DequantizeLinear", ["x", "s", "z"], ["out0"],
+                           axis=0)],
+         {},
+         initializers={"x": RNG.integers(-128, 128, (3, 4)).astype(np.int8),
+                       "s": np.array([0.02, 0.05, 0.1], dtype=np.float32),
+                       "z": np.array([-5, 0, 20], dtype=np.int8)})
+    emit("dynamicquantizelinear",
+         [helper.make_node("DynamicQuantizeLinear", ["x"],
+                           ["out0", "out1", "out2"])],
+         {"x": f32(3, 4) * 3}, n_outputs=3)
+    # QDQ conv: int8 weights dequantize at load (constant-folded), input
+    # goes through a Q->DQ pair, conv runs in float.
+    emit("qdq_conv",
+         [helper.make_node("QuantizeLinear", ["x", "sx", "zx"], ["xq"]),
+          helper.make_node("DequantizeLinear", ["xq", "sx", "zx"], ["xdq"]),
+          helper.make_node("DequantizeLinear", ["wq", "sw", "zw"], ["wdq"],
+                           axis=0),
+          helper.make_node("Conv", ["xdq", "wdq"], ["out0"],
+                           pads=[1, 1, 1, 1])],
+         {"x": f32(1, 2, 5, 5)},
+         initializers={
+             "sx": np.array(0.04, dtype=np.float32),
+             "zx": np.array(128, dtype=np.uint8),
+             "wq": RNG.integers(-128, 128, (3, 2, 3, 3)).astype(np.int8),
+             "sw": np.array([0.01, 0.02, 0.015], dtype=np.float32),
+             "zw": np.array([0, 0, 0], dtype=np.int8),
+         })
 
     # ---- A4: control flow ----
     def vi(name, dt, shape):

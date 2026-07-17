@@ -60,10 +60,16 @@ class OnnxGraphExecutor {
   /// Minimum activation rows before a matmul is worth the isolate round-trip.
   static const _minPoolRows = 4;
 
+  /// Original TensorProto element types of the initializers — widening int8/
+  /// uint8 to int64 loses signedness, which QuantizeLinear's saturation
+  /// bounds still need (3 = INT8 per the proto enum).
+  final Map<String, int> _initializerElemType = {};
+
   OnnxGraphExecutor(ModelProto model, {ExternalDataResolver? externalData})
       : _graph = model.graph {
     for (final t in _graph.initializer) {
       _initializers[t.name] = tensorFromProto(t, ext: externalData);
+      _initializerElemType[t.name] = t.dataType;
     }
     _nodes = _foldConstants();
   }
@@ -623,6 +629,26 @@ class OnnxGraphExecutor {
         return [ops.opPRelu(need(0), need(1))];
       case 'Size':
         return [ops.opSize(need(0))];
+      case 'QuantizeLinear':
+        // Saturation bounds come from the zero-point tensor's declared
+        // dtype; absent zero point means uint8 per the spec.
+        final int8 = node.input.length > 2 &&
+            _initializerElemType[node.input[2]] == 3;
+        return [
+          ops.opQuantizeLinear(need(0), need(1),
+              ins.length > 2 ? ins[2] : null,
+              axis: attrs.getInt('axis') ?? 1,
+              lo: int8 ? -128 : 0,
+              hi: int8 ? 127 : 255)
+        ];
+      case 'DequantizeLinear':
+        return [
+          ops.opDequantizeLinear(need(0), need(1),
+              ins.length > 2 ? ins[2] : null,
+              axis: attrs.getInt('axis') ?? 1)
+        ];
+      case 'DynamicQuantizeLinear':
+        return ops.opDynamicQuantizeLinear(need(0));
       case 'Pad':
         // Opset 11+ takes pads/value/axes as inputs; opset 2 as attributes.
         final padsList = ins.length > 1 && ins[1] != null
