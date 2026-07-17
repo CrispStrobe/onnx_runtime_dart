@@ -16,12 +16,14 @@ Native ORT reference on identical inputs (`onnxruntime` 1.27.0 CPU):
 | 2026-07-17 | + GELU/SDPA fusion (quiet machine, load ≈ 4) | 66.2 ms | 4.1× | MatMul 83.2%, _FusedGelu 8.0%, _FusedSDPA 3.0% |
 | 2026-07-17 | + isolate pool, 4 workers (`runAsync`, single warmed run) | ≈42 ms | 2.6× | — |
 
-Isolate pool scaling on MiniLM (single warmed run each, bitwise-identical
-outputs): 0 workers ≈ 120 ms, 2 workers ≈ 48 ms, 4 workers ≈ 42 ms.
+| 2026-07-17 | register-blocked 4×8 GEMM microkernel (accumulators in locals) | 67.3 ms | 4.2× | — |
+| 2026-07-17 | + isolate pool, 4 workers (min of 15) | **32.6 ms** | **2.0×** | — |
 
-Pending: the register-blocked 4×8 GEMM microkernel (accumulator tile in
-locals instead of load-modify-store buffers) landed correctness-verified at
-load-avg ~75 — re-measure all three rows above on a quiet machine.
+Isolate pool scaling on MiniLM (bitwise-identical outputs): the 4-worker
+run is 2.0× off single-threaded native ORT and 4.8× off ORT's own
+multi-threaded 6.8 ms. Small-m transformer GEMMs saw little from the
+register-blocked kernel (sync ≈ unchanged); large conv GEMMs did —
+see the vision table.
 
 Caveat: this machine runs other dev workloads; min-of-15-iters is the robust
 number, means can inflate 2–3× under contention. Rows above marked "quiet
@@ -34,9 +36,10 @@ machine" were measured at load ≈ 4; the earlier rows at load 10–30.
 | 2026-07-17 | A1: naive direct conv | 4612 ms | 11520 ms |
 | 2026-07-17 | A2: im2col + SIMD GEMM conv (depthwise stays direct) | 655 ms | 625 ms |
 | 2026-07-17 | + padded-buffer branchless depthwise (quiet machine) | 260 ms | 422 ms |
+| 2026-07-17 | + register-blocked 4×8 GEMM microkernel | 230 ms | 332 ms |
 
 ORT reference: MobileNetV2 15.4 ms (1-thread) / 5.1 ms (default);
-ResNet18 47.9 ms / 14.9 ms. Gap ≈ 17× / 8.8× single-threaded; Conv is
+ResNet18 47.9 ms / 14.9 ms. Gap ≈ 15× / 6.9× single-threaded; Conv is
 ~88% of both profiles.
 
 Per-op shares come from `ExecutionProfile` (`--iters` accumulate). Regenerate
