@@ -10,6 +10,7 @@ import 'onnx_nn_ops.dart' as nn;
 import 'onnx_ops.dart' as ops;
 import 'onnx_rnn_ops.dart' as rnn;
 import 'onnx_proto_loader.dart';
+import 'parallel_pool_stub.dart' if (dart.library.ffi) 'parallel_pool.dart';
 import 'tensor.dart';
 
 /// Cumulative per-op-type timing for one or more [OnnxGraphExecutor.run]
@@ -52,6 +53,12 @@ class OnnxGraphExecutor {
 
   /// Nodes remaining after load-time constant folding, in execution order.
   late final List<NodeProto> _nodes;
+
+  /// Isolate GEMM pool (native only), populated by [parallelize].
+  GemmPool? _pool;
+
+  /// Minimum activation rows before a matmul is worth the isolate round-trip.
+  static const _minPoolRows = 4;
 
   OnnxGraphExecutor(ModelProto model, {ExternalDataResolver? externalData})
       : _graph = model.graph {
@@ -115,6 +122,93 @@ class OnnxGraphExecutor {
       {ExecutionProfile? profile}) {
     final values = <String, Tensor>{..._initializers, ...inputs};
     _execNodes(_nodes, values, profile);
+    return {for (final name in outputNames) name: values[name]!};
+  }
+
+  /// Spawns [workers] isolate workers and partitions every 2-D float
+  /// initializer fed to a top-level `MatMul` (with at least
+  /// [minWeightElements] elements) across them by output column. After this,
+  /// [runAsync] executes those matmuls on the pool; [run] stays
+  /// single-threaded. Native targets only.
+  Future<void> parallelize(
+      {required int workers, int minWeightElements = 65536}) async {
+    final toPartition = <String, (Float32List, int, int)>{};
+    for (final node in _nodes) {
+      if (node.opType != 'MatMul' || node.input.length < 2) continue;
+      final name = node.input[1];
+      final t = _initializers[name];
+      if (t == null || !t.isFloat || t.rank != 2) continue;
+      if (t.length < minWeightElements) continue;
+      toPartition[name] = (t.f!, t.shape[0], t.shape[1]);
+    }
+    _pool = await GemmPool.spawn(workers, toPartition);
+  }
+
+  void dispose() {
+    _pool?.dispose();
+    _pool = null;
+  }
+
+  /// Async variant of [run]: identical semantics and (bitwise) results, but
+  /// pool-partitioned matmuls execute across the worker isolates.
+  Future<Map<String, Tensor>> runAsync(
+      Map<String, Tensor> inputs, List<String> outputNames,
+      {ExecutionProfile? profile}) async {
+    final values = <String, Tensor>{..._initializers, ...inputs};
+    final sw = profile == null ? null : Stopwatch();
+    final pool = _pool;
+
+    for (final node in _nodes) {
+      final attrs = _AttrMap(node.attribute);
+      final ins = [
+        for (final name in node.input) name.isEmpty ? null : values[name]
+      ];
+      List<Tensor> outs;
+      sw?..reset()..start();
+      try {
+        final part = pool != null && node.opType == 'MatMul'
+            ? pool.weights[node.input[1]]
+            : null;
+        final a = part == null ? null : ins[0];
+        if (part != null &&
+            a != null &&
+            a.isFloat &&
+            a.rank >= 2 &&
+            a.shape[a.rank - 1] == part.k &&
+            a.length ~/ part.k >= _minPoolRows) {
+          final m = a.length ~/ part.k;
+          final out = await pool!.matmul(node.input[1], a.f!, m);
+          outs = [
+            Tensor.float(out, [...a.shape.sublist(0, a.rank - 1), part.n])
+          ];
+        } else {
+          switch (node.opType) {
+            case 'If':
+              final branch =
+                  ins[0]!.getI(0) != 0 ? 'then_branch' : 'else_branch';
+              outs = _execSubgraph(
+                  attrs.getGraph(branch)!, values, const [], profile);
+            case 'Loop':
+              outs = _runLoop(node, ins, attrs, values, profile);
+            default:
+              outs = _dispatch(node, ins, attrs);
+          }
+        }
+      } catch (e) {
+        throw StateError('ONNX graph execution failed at node "${node.name}" '
+            '(op=${node.opType}): $e');
+      }
+      if (profile != null) {
+        sw!.stop();
+        profile.callsByOp.update(node.opType, (v) => v + 1, ifAbsent: () => 1);
+        profile.microsByOp.update(
+            node.opType, (v) => v + sw.elapsedMicroseconds,
+            ifAbsent: () => sw.elapsedMicroseconds);
+      }
+      for (int k = 0; k < node.output.length && k < outs.length; k++) {
+        if (node.output[k].isNotEmpty) values[node.output[k]] = outs[k];
+      }
+    }
     return {for (final name in outputNames) name: values[name]!};
   }
 

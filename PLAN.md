@@ -3,7 +3,9 @@
 > **Status (2026-07-17):** B0 ✅ B1 ✅ B2 ✅ B3 ✅ (constant folding +
 > hot-op fast paths; pattern *fusion* — GELU/attention — still open) ·
 > A1 ✅ A2 ✅ A3 ✅ (LSTM/GRU/RNN; Silero VAD verified) A4 ✅ (If/Loop;
-> Scan open) · A5 (quantization) and B4 (isolates) open. Depthwise-conv
+> Scan open) B4 ✅ (isolate pool: column-partitioned MatMul weights,
+> `parallelize`/`runAsync`, bitwise-equal to sync; Gemm/conv fan-out and
+> speedup measurement still open) · A5 (quantization) open. Depthwise-conv
 > fast path landed but is not yet benchmarked on a quiet machine. Numbers
 > in `BENCHMARKS.md`; per-op ORT parity fixtures in `test/fixtures/`
 > (`tool/gen_fixtures.py`), live-model parity via `tool/live_parity.py|dart`.

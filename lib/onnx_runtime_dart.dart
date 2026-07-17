@@ -65,4 +65,27 @@ class OnnxModel {
     ExecutionProfile? profile,
   }) =>
       _executor.run(inputs, outputNames, profile: profile);
+
+  /// Spawns [workers] isolate workers and partitions the model's large
+  /// `MatMul` weights across them by output column; afterwards [runAsync]
+  /// executes those matmuls in parallel (results stay bitwise identical to
+  /// [run]). Native targets only — throws [UnsupportedError] on the web.
+  ///
+  /// Call [dispose] when done to shut the workers down.
+  Future<void> parallelize({required int workers, int minWeightElements = 65536}) =>
+      _executor.parallelize(
+          workers: workers, minWeightElements: minWeightElements);
+
+  /// Like [run], but partitioned matmuls execute on the isolate pool set up
+  /// by [parallelize]. Without a prior [parallelize] call it behaves exactly
+  /// like [run].
+  Future<Map<String, Tensor>> runAsync(
+    Map<String, Tensor> inputs,
+    List<String> outputNames, {
+    ExecutionProfile? profile,
+  }) =>
+      _executor.runAsync(inputs, outputNames, profile: profile);
+
+  /// Shuts down the isolate pool (no-op if [parallelize] was never called).
+  void dispose() => _executor.dispose();
 }

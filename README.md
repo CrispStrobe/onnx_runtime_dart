@@ -25,6 +25,16 @@ native targets (scalar fallback on web), im2col convolution, load-time
 constant folding and weight prepacking; see `BENCHMARKS.md` for current
 numbers vs native ONNX Runtime.
 
+On native targets you can additionally spread large matmuls across an
+**isolate worker pool** — each worker permanently owns a column slice of the
+big weights, so per-run messages carry only activations:
+
+```dart
+await model.parallelize(workers: 4);        // once, after loading
+final out = await model.runAsync(inputs, ['output']); // bitwise == run()
+model.dispose();                            // shuts the workers down
+```
+
 ## Install
 
 ```yaml

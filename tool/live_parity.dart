@@ -1,9 +1,12 @@
 /// Replays a live-parity case produced by `tool/live_parity.py` through the
 /// Dart runtime and reports cosine similarity + max abs diff vs native ORT.
 ///
-///   dart run tool/live_parity.dart model.onnx case.json
+///   dart run tool/live_parity.dart model.onnx case.json [--workers N]
 ///
-/// Exits non-zero if cosine < 0.999999 or max|Δ| > 1e-3 on any output.
+/// With --workers, large MatMul weights are partitioned across an isolate
+/// pool and the model runs through `runAsync` (results must be bitwise
+/// identical to the sync path). Exits non-zero if cosine < 0.999999 or
+/// max|Δ| > 1e-3 on any output.
 library;
 
 import 'dart:convert';
@@ -27,7 +30,7 @@ Tensor tensorFromJson(Map<String, dynamic> j) {
       shape);
 }
 
-void main(List<String> args) {
+Future<void> main(List<String> args) async {
   final model = loadOnnxModel(args[0]);
   final j = jsonDecode(File(args[1]).readAsStringSync()) as Map<String, dynamic>;
   final inputs = (j['inputs'] as Map<String, dynamic>)
@@ -35,9 +38,19 @@ void main(List<String> args) {
   final expected = (j['expected'] as Map<String, dynamic>)
       .map((k, v) => MapEntry(k, tensorFromJson(v as Map<String, dynamic>)));
 
+  final wk = args.indexOf('--workers');
+  final workers = wk >= 0 ? int.parse(args[wk + 1]) : 0;
+  if (workers > 0) {
+    await model.parallelize(workers: workers);
+    await model.runAsync(inputs, expected.keys.toList()); // warmup
+  }
+
   final sw = Stopwatch()..start();
-  final got = model.run(inputs, expected.keys.toList());
+  final got = workers > 0
+      ? await model.runAsync(inputs, expected.keys.toList())
+      : model.run(inputs, expected.keys.toList());
   sw.stop();
+  model.dispose();
 
   bool ok = true;
   expected.forEach((name, want) {
