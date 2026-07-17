@@ -29,6 +29,17 @@ Caveat: this machine runs other dev workloads; min-of-15-iters is the robust
 number, means can inflate 2–3× under contention. Rows above marked "quiet
 machine" were measured at load ≈ 4; the earlier rows at load 10–30.
 
+## Maia3-5M chess transformer (batch 1, min of 25, cosine-1.0 throughout)
+
+| Change | min wall |
+|---|---|
+| baseline (register-blocked GEMM era) | 335 ms |
+| + batch-collapse for shared-weight MatMul (`[64,1,k]@[k,n]` was re-packing the weight 64×, m=1) and SIMD row-dot einsum kernels | 135 ms |
+| + isolate pool, 4 workers | 102 ms |
+
+For engine throughput, batch positions: `tokens` accepts `[N, 64, 96]`, and
+GEMM efficiency rises with N (m = 64·N rows per matmul).
+
 ## Vision models (224×224, batch 1, cosine-1.0 parity vs ORT throughout)
 
 | Date | Change | MobileNetV2 | ResNet18 |

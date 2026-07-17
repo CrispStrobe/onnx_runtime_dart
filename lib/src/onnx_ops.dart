@@ -1205,6 +1205,20 @@ Tensor opMatMul(Tensor a, Tensor b) {
   final outShape = [...outBatch, m, n];
 
   final batchCount = outBatch.fold<int>(1, (x, y) => x * y);
+
+  // B without batch dims (a shared weight): every batch of A multiplies the
+  // same matrix, and A's batches are contiguous rows — collapse them into a
+  // single GEMM. Otherwise a [64,1,k] @ [k,n] would re-pack the weight 64
+  // times to compute one row each (observed: 3x whole-model slowdowns).
+  if (a.f != null &&
+      b.f != null &&
+      batchCount > 1 &&
+      bBatch.fold<int>(1, (x, y) => x * y) == 1) {
+    final out = Float32List(batchCount * m * n);
+    gemm.matmulKernel(a.f!, 0, b.f!, 0, out, 0, batchCount * m, k, n);
+    return Tensor.float(out, outShape);
+  }
+
   final out = Float32List(batchCount * m * n);
 
   final aMatSize = m * k, bMatSize = k2 * n;
@@ -1416,23 +1430,17 @@ Tensor opEinsum(String equation, List<Tensor> inputs) {
 
 // A:[b,h,i], B:[o,i] -> out[b,h,o] = sum_i A[b,h,i]*B[o,i]  (a linear layer)
 Tensor _einsumBhiOi(Tensor a, Tensor b) {
+  // B arrives as [o, i]: both operands are already contiguous along the
+  // contraction axis, so SIMD row dots beat a transpose+pack GEMM here.
   final bs = a.shape[0], h = a.shape[1], i = a.shape[2];
   final o = b.shape[0];
   assert(b.shape[1] == i);
   final out = Float32List(bs * h * o);
   final af = a.f!, bf = b.f!;
-  for (int bi = 0; bi < bs; bi++) {
-    for (int hi = 0; hi < h; hi++) {
-      final aBase = (bi * h + hi) * i;
-      final outBase = (bi * h + hi) * o;
-      for (int oi = 0; oi < o; oi++) {
-        double sum = 0;
-        final bBase = oi * i;
-        for (int ii = 0; ii < i; ii++) {
-          sum += af[aBase + ii] * bf[bBase + ii];
-        }
-        out[outBase + oi] = sum;
-      }
+  for (int r = 0; r < bs * h; r++) {
+    final aBase = r * i, outBase = r * o;
+    for (int oi = 0; oi < o; oi++) {
+      out[outBase + oi] = gemm.dotProduct(af, aBase, bf, oi * i, i);
     }
   }
   return Tensor.float(out, [bs, h, o]);
@@ -1440,6 +1448,8 @@ Tensor _einsumBhiOi(Tensor a, Tensor b) {
 
 // A:[b,i,d], B:[b,j,d] -> out[b,i,j] = sum_d A[b,i,d]*B[b,j,d]  (attention scores)
 Tensor _einsumBidBjd(Tensor a, Tensor b) {
+  // Both operands contract along their contiguous last axis — SIMD row
+  // dots, no transpose needed (attention scores).
   final bs = a.shape[0], i = a.shape[1], d = a.shape[2];
   final j = b.shape[1];
   assert(b.shape[0] == bs && b.shape[2] == d);
@@ -1449,13 +1459,9 @@ Tensor _einsumBidBjd(Tensor a, Tensor b) {
     for (int ii = 0; ii < i; ii++) {
       final aBase = (bi * i + ii) * d;
       final outBase = (bi * i + ii) * j;
+      final bBatch = bi * j * d;
       for (int ji = 0; ji < j; ji++) {
-        double sum = 0;
-        final bBase = (bi * j + ji) * d;
-        for (int di = 0; di < d; di++) {
-          sum += af[aBase + di] * bf[bBase + di];
-        }
-        out[outBase + ji] = sum;
+        out[outBase + ji] = gemm.dotProduct(af, aBase, bf, bBatch + ji * d, d);
       }
     }
   }

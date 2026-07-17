@@ -39,3 +39,13 @@ void matmulKernel(Float32List a, int aOff, Float32List b, int bOff,
     }
   }
 }
+
+/// Scalar dot product of two contiguous rows (same contract as the SIMD
+/// variant in gemm_kernel_simd.dart).
+double dotProduct(Float32List a, int aOff, Float32List b, int bOff, int n) {
+  double sum = 0;
+  for (int k = 0; k < n; k++) {
+    sum += a[aOff + k] * b[bOff + k];
+  }
+  return sum;
+}
