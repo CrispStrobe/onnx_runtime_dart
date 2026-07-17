@@ -3,10 +3,13 @@
 > **Status (2026-07-17): all workstreams landed.** B0–B4 ✅ (incl. GELU +
 > SDPA pattern fusion; isolate pool) · A1–A5 ✅ (conv/pool, im2col,
 > LSTM/GRU/RNN, If/Loop/Scan, QDQ **and** QOperator quantization).
+> Compact uint8/int8 tensor storage landed (1 byte/element end to end;
+> QuantizeLinear/DynamicQuantizeLinear produce compact outputs).
 > Remaining follow-ups: quiet-machine benchmarks for depthwise conv /
 > fusion / isolate pool (machine was at load-avg 70–160 when they landed —
 > parity is verified, wall-clock impact is not); Scan non-default
-> axes/directions; pool fan-out for Gemm/conv. Numbers in `BENCHMARKS.md`;
+> axes/directions; pool fan-out for Gemm/conv; com.microsoft-domain ops
+> (MatMulNBits for int4 models). Numbers in `BENCHMARKS.md`;
 > per-op ORT parity fixtures in `test/fixtures/` (`tool/gen_fixtures.py`),
 > live-model parity via `tool/live_parity.py|dart`.
 

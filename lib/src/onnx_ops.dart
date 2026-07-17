@@ -424,7 +424,7 @@ Tensor _elementwiseUnary(Tensor a, double Function(double) op) {
       out[k] = op(af[k]);
     }
   } else {
-    final ai = a.i!;
+    final ai = a.intData;
     for (int k = 0; k < n; k++) {
       out[k] = op(ai[k].toDouble());
     }
@@ -595,7 +595,7 @@ Tensor opTranspose(Tensor x, List<int> perm) {
     return Tensor.float(out, newShape);
   }
   final out = Int64List(n);
-  final xi = x.i!;
+  final xi = x.intData;
   for (int idx = 0; idx < n; idx++) {
     out[idx] = xi[srcOff];
     for (int k = rank - 1; k >= 0; k--) {
@@ -620,9 +620,7 @@ Tensor opSqueeze(Tensor x, List<int>? axes) {
     for (int k = 0; k < x.shape.length; k++)
       if (!ax.contains(k)) x.shape[k]
   ];
-  return x.isFloat
-      ? Tensor.float(x.f!, newShape)
-      : Tensor.int64(x.i!, newShape);
+  return x.reshape(newShape);
 }
 
 Tensor opUnsqueeze(Tensor x, List<int> axes) {
@@ -637,9 +635,7 @@ Tensor opUnsqueeze(Tensor x, List<int> axes) {
       newShape.add(x.shape[srcIdx++]);
     }
   }
-  return x.isFloat
-      ? Tensor.float(x.f!, newShape)
-      : Tensor.int64(x.i!, newShape);
+  return x.reshape(newShape);
 }
 
 Tensor opConcat(List<Tensor> inputs, int axis) {
@@ -667,7 +663,7 @@ Tensor opConcat(List<Tensor> inputs, int axis) {
         if (isFloat) {
           outF![dstStart + k] = t.f![srcStart + k];
         } else {
-          outI![dstStart + k] = t.i![srcStart + k];
+          outI![dstStart + k] = t.intData[srcStart + k];
         }
       }
       axOffset += tAx;
@@ -712,7 +708,7 @@ Tensor opGather(Tensor data, Tensor indices, int axis) {
         if (isFloat) {
           outF![outPos + k] = data.f![srcStart + k];
         } else {
-          outI![outPos + k] = data.i![srcStart + k];
+          outI![outPos + k] = data.intData[srcStart + k];
         }
       }
       outPos += innerSize;
@@ -751,7 +747,7 @@ Tensor opGatherND(Tensor data, Tensor indices, int batchDims) {
       if (isFloat) {
         outF![t * innerSize + j] = data.f![dataFlatStart + j];
       } else {
-        outI![t * innerSize + j] = data.i![dataFlatStart + j];
+        outI![t * innerSize + j] = data.intData[dataFlatStart + j];
       }
     }
   }
@@ -777,7 +773,7 @@ Tensor opExpand(Tensor x, Tensor shapeT) {
   } else {
     final out = Int64List(n);
     for (int idx = 0; idx < n; idx++) {
-      out[idx] = x.i![_flattenBroadcast(_unflatten(idx, outShape), x.shape)];
+      out[idx] = x.intData[_flattenBroadcast(_unflatten(idx, outShape), x.shape)];
     }
     return Tensor.int64(out, outShape);
   }
@@ -835,7 +831,7 @@ Tensor opSlice(Tensor x, List<int> starts, List<int> ends, List<int>? axes,
     if (isFloat) {
       outF![idx] = x.f![srcFlat];
     } else {
-      outI![idx] = x.i![srcFlat];
+      outI![idx] = x.intData[srcFlat];
     }
   }
   return isFloat
@@ -1411,7 +1407,10 @@ int _channelOf(int k, List<int> shape, int axis) {
 Tensor opQuantizeLinear(Tensor x, Tensor scale, Tensor? zeroPoint,
     {int axis = 1, required int lo, required int hi}) {
   final n = x.length;
-  final out = Int64List(n);
+  // Compact output: int8 when the range is signed, uint8 otherwise.
+  final signed = lo < 0;
+  final outI8 = signed ? Int8List(n) : null;
+  final outU8 = signed ? null : Uint8List(n);
   final perAxis = scale.length > 1;
   final ax = axis < 0 ? axis + x.rank : axis;
   final sf = scale.asFloatList();
@@ -1419,9 +1418,16 @@ Tensor opQuantizeLinear(Tensor x, Tensor scale, Tensor? zeroPoint,
   for (int k = 0; k < n; k++) {
     final c = perAxis ? _channelOf(k, x.shape, ax) : 0;
     final q = _roundEven(x.getD(k) / sf[c]) + (zp == null ? 0 : zp[c]);
-    out[k] = q < lo ? lo : (q > hi ? hi : q);
+    final v = q < lo ? lo : (q > hi ? hi : q);
+    if (signed) {
+      outI8![k] = v;
+    } else {
+      outU8![k] = v;
+    }
   }
-  return Tensor.int64(out, x.shape);
+  return signed
+      ? Tensor.int8(outI8!, x.shape)
+      : Tensor.uint8(outU8!, x.shape);
 }
 
 /// `DequantizeLinear`: `y = (x - zeroPoint) * scale`, per-tensor or per-axis.
@@ -1433,7 +1439,7 @@ Tensor opDequantizeLinear(Tensor x, Tensor scale, Tensor? zeroPoint,
   final ax = axis < 0 ? axis + x.rank : axis;
   final sf = scale.asFloatList();
   final zp = zeroPoint?.asIntList();
-  final xi = x.asIntList();
+  final xi = x.intData;
   for (int k = 0; k < n; k++) {
     final c = perAxis ? _channelOf(k, x.shape, ax) : 0;
     out[k] = (xi[k] - (zp == null ? 0 : zp[c])) * sf[c];
@@ -1450,16 +1456,23 @@ List<Tensor> opDynamicQuantizeLinear(Tensor x) {
     if (v < mn) mn = v;
     if (v > mx) mx = v;
   }
-  final scale = (mx - mn) / 255.0;
-  final zpF = scale == 0 ? 0.0 : -mn / scale;
+  // The reference computes scale and zero point in float32 — matching that
+  // exactly matters, because a scale differing in the last bit shifts every
+  // quantized value (the downstream integer math then diverges everywhere).
+  final f32 = Float32List(1);
+  f32[0] = (mx - mn) / 255.0;
+  final scale = f32[0].toDouble();
+  f32[0] = scale == 0 ? 0 : -mn / scale;
+  final zpF = f32[0].toDouble();
   final zp = _roundEven(zpF.clamp(0.0, 255.0));
-  final out = Int64List(xf.length);
+  final out = Uint8List(xf.length);
   for (int k = 0; k < xf.length; k++) {
-    final q = scale == 0 ? zp : _roundEven(xf[k] / scale) + zp;
+    f32[0] = scale == 0 ? 0 : xf[k] / scale;
+    final q = scale == 0 ? zp : _roundEven(f32[0].toDouble()) + zp;
     out[k] = q < 0 ? 0 : (q > 255 ? 255 : q);
   }
   return [
-    Tensor.int64(out, x.shape),
+    Tensor.uint8(out, x.shape),
     Tensor.scalarFloat(scale),
     Tensor.scalarInt(zp),
   ];
@@ -1524,7 +1537,7 @@ Tensor opPad(Tensor x, List<int> pads, {
     if (isFloat) {
       outF![idx] = inside ? x.f![srcOff] : constantValue;
     } else {
-      outI![idx] = inside ? x.i![srcOff] : constantValue.toInt();
+      outI![idx] = inside ? x.intData[srcOff] : constantValue.toInt();
     }
     for (int a = rank - 1; a >= 0; a--) {
       if (++coords[a] < outShape[a]) break;
@@ -1621,7 +1634,7 @@ Tensor opGatherElements(Tensor data, Tensor indices, int axis) {
     if (isFloat) {
       outF![idx] = data.f![flat];
     } else {
-      outI![idx] = data.i![flat];
+      outI![idx] = data.intData[flat];
     }
   }
   return isFloat

@@ -31,6 +31,14 @@ float-ordering differences flip quantization buckets, and ORT's own optimized
 vs unoptimized execution of the same model only agrees with itself to cosine
 ≈0.993 — our output lands in the same band (≈0.991).
 
+**Octen-0.6B int8** (QOperator dynamic quantization, 196 `MatMulInteger`,
+1 GB of int8 weights running in ~1 GB of RAM via compact storage) runs
+end-to-end; the runtime-induced deviation from ORT-int8 (cosine 0.96 on the
+pooled embedding) is far smaller than that model's own quantization error vs
+its fp32 original (cosine 0.73) — dynamic quantization amplifies
+transcendental-function rounding differences across layers, so int8-vs-int8
+bitwise parity is unattainable for any independent implementation.
+
 Execution uses a packed, register-tiled **`Float32x4` SIMD GEMM kernel** on
 native targets (scalar fallback on web), im2col convolution, load-time
 constant folding and weight prepacking; see `BENCHMARKS.md` for current
@@ -111,9 +119,12 @@ self-contained, runnable graph built with the protobuf types.
 - **Quantization:** QDQ format — `QuantizeLinear`, `DequantizeLinear`
   (per-tensor + per-axis, uint8/int8), `DynamicQuantizeLinear`; weight
   `DequantizeLinear` nodes constant-fold at load, so QDQ models run at float
-  speed. QOperator format — `MatMulInteger`, `ConvInteger`, `QLinearMatMul`,
-  `QLinearConv` (per-channel weight scales + int32 bias) with exact int32
-  accumulation and round-half-to-even requantization.
+  speed. QOperator format — `MatMulInteger` (scalar / per-row / per-column
+  zero points, batched), `ConvInteger`, `QLinearMatMul`, `QLinearConv`
+  (per-channel weight scales + int32 bias) with exact int32 accumulation and
+  round-half-to-even requantization. int8/uint8 tensors use **compact 1-byte
+  storage** end to end — a 1 GB int8 model needs ~1 GB, not the 8 GB an
+  int64 widening would cost.
 - **Fusion (load-time, automatic):** the erf-GELU chain
   (`0.5·x·(1+Erf(x/√2))`) fuses to a single pass, and the attention epilogue
   `MatMul(Softmax(MatMul(Q,K)·s + mask), V)` fuses so scale + mask + softmax

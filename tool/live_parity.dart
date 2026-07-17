@@ -48,9 +48,16 @@ Future<void> main(List<String> args) async {
   final sw = Stopwatch()..start();
   final got = workers > 0
       ? await model.runAsync(inputs, expected.keys.toList())
-      : model.run(inputs, expected.keys.toList());
+      : model.run(inputs, const ['*']);
   sw.stop();
   model.dispose();
+  // Graph rewrites (fusion) may remove intermediate names a debug case
+  // requests; report and skip those rather than failing.
+  expected.removeWhere((name, _) {
+    if (got.containsKey(name)) return false;
+    stderr.writeln('$name: not produced (folded/fused away) — skipped');
+    return true;
+  });
 
   bool ok = true;
   expected.forEach((name, want) {

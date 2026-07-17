@@ -289,6 +289,9 @@ class OnnxGraphExecutor {
       {ExecutionProfile? profile}) {
     final values = <String, Tensor>{..._initializers, ...inputs};
     _execNodes(_nodes, values, profile);
+    // Debug escape hatch: ['*'] returns every value produced (note that
+    // constant folding and fusion remove some of the file's tensor names).
+    if (outputNames.length == 1 && outputNames.first == '*') return values;
     return {for (final name in outputNames) name: values[name]!};
   }
 
@@ -540,8 +543,8 @@ class OnnxGraphExecutor {
     }
     final out = Int64List(steps.length * steps.first.length);
     for (int k = 0; k < steps.length; k++) {
-      out.setRange(
-          k * steps.first.length, (k + 1) * steps.first.length, steps[k].i!);
+      out.setRange(k * steps.first.length, (k + 1) * steps.first.length,
+          steps[k].asIntList());
     }
     return Tensor.int64(out, shape);
   }

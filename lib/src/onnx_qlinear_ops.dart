@@ -1,10 +1,11 @@
 /// QOperator-format quantized operators: `MatMulInteger`, `ConvInteger`,
 /// `QLinearMatMul`, `QLinearConv` (per the public ONNX operator spec).
 ///
-/// Quantized values arrive widened to int64 (see the proto loader), so the
-/// integer accumulation here is exact int32 semantics with headroom to
-/// spare. Requantization uses round-half-to-even on the float multiplier,
-/// matching the ONNX reference / ORT CPU behavior.
+/// Quantized operands are read through `Tensor.intData`, which covers both
+/// the compact uint8/int8 storage (weights, quantized activations) and
+/// int64; accumulation is exact int32 semantics with headroom to spare.
+/// Requantization uses round-half-to-even on the float multiplier, matching
+/// the ONNX reference / ORT CPU behavior.
 library;
 
 import 'dart:typed_data';
@@ -22,36 +23,49 @@ int _roundEven(double v) {
 
 /// `MatMulInteger`: `y_int32 = (A - aZp) · (B - bZp)`. 2-D or batched like
 /// MatMul (batch dims must match exactly here — quantized graphs don't
-/// broadcast matmul batches in practice). Zero points must be scalars
-/// (per-row/per-column zero points are not supported).
+/// broadcast matmul batches in practice). Zero points may be scalar,
+/// per-row `[M]` for A, or per-column `[N]` for B.
 Tensor opMatMulInteger(Tensor a, Tensor b, Tensor? aZp, Tensor? bZp) {
-  if ((aZp != null && aZp.length != 1) || (bZp != null && bZp.length != 1)) {
-    throw UnsupportedError('MatMulInteger: only scalar zero points supported');
-  }
-  final az = aZp?.getI(0) ?? 0, bz = bZp?.getI(0) ?? 0;
   final aRank = a.rank, bRank = b.rank;
   final m = a.shape[aRank - 2], k = a.shape[aRank - 1];
   final n = b.shape[bRank - 1];
   assert(b.shape[bRank - 2] == k, 'MatMulInteger inner dim mismatch');
+  if ((aZp != null && aZp.length != 1 && aZp.length != m) ||
+      (bZp != null && bZp.length != 1 && bZp.length != n)) {
+    throw UnsupportedError('MatMulInteger: zero points must be scalar, '
+        'per-row [M] for A or per-column [N] for B');
+  }
+  final az = aZp == null || aZp.length != 1 ? 0 : aZp.getI(0);
+  final azRow = aZp != null && aZp.length == m && m != 1 ? aZp.intData : null;
+  final bz = bZp == null || bZp.length != 1 ? 0 : bZp.getI(0);
+  final bzCol = bZp != null && bZp.length == n && n != 1 ? bZp.intData : null;
   final aBatch = a.length ~/ (m * k), bBatch = b.length ~/ (k * n);
   final batch = aBatch > bBatch ? aBatch : bBatch;
   assert(aBatch == batch || aBatch == 1, 'MatMulInteger batch mismatch');
   assert(bBatch == batch || bBatch == 1, 'MatMulInteger batch mismatch');
 
-  final ai = a.asIntList(), bi = b.asIntList();
+  final ai = a.intData, bi = b.intData;
   final out = Int64List(batch * m * n);
   for (int bb = 0; bb < batch; bb++) {
     final aOff = (aBatch == 1 ? 0 : bb) * m * k;
     final bOff = (bBatch == 1 ? 0 : bb) * k * n;
     final oOff = bb * m * n;
     for (int i = 0; i < m; i++) {
+      final azi = azRow != null ? azRow[i] : az;
       for (int kk = 0; kk < k; kk++) {
-        final av = ai[aOff + i * k + kk] - az;
+        final av = ai[aOff + i * k + kk] - azi;
+        // Zero contributions are exact to skip even with per-column bZp.
         if (av == 0) continue;
         final bRow = bOff + kk * n;
         final oRow = oOff + i * n;
-        for (int j = 0; j < n; j++) {
-          out[oRow + j] += av * (bi[bRow + j] - bz);
+        if (bzCol == null) {
+          for (int j = 0; j < n; j++) {
+            out[oRow + j] += av * (bi[bRow + j] - bz);
+          }
+        } else {
+          for (int j = 0; j < n; j++) {
+            out[oRow + j] += av * (bi[bRow + j] - bzCol[j]);
+          }
         }
       }
     }
@@ -104,7 +118,7 @@ Int64List _convIntAcc(
   final dh = dilations[0], dw = dilations[1];
   final ph = pads[0], pw = pads[1];
   final mPerGroup = m ~/ group;
-  final xi = x.asIntList(), wi = w.asIntList();
+  final xi = x.intData, wi = w.intData;
   final out = Int64List(n * m * oh * ow);
 
   for (int b = 0; b < n; b++) {

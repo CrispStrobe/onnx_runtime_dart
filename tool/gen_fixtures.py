@@ -476,6 +476,12 @@ def main():
          initializers={"a": u8(2, 4, 6), "b": i8(2, 6, 5),
                        "az": np.array(100, dtype=np.uint8),
                        "bz": np.array(0, dtype=np.int8)})
+    emit("matmulinteger_percol_bzp",
+         [helper.make_node("MatMulInteger", ["a", "b", "az", "bz"], ["out0"])],
+         {},
+         initializers={"a": u8(4, 6), "b": i8(6, 5),
+                       "az": np.array(77, dtype=np.uint8),
+                       "bz": i8(5)})
     emit("convinteger",
          [helper.make_node("ConvInteger", ["x", "w", "xz", "wz"], ["out0"],
                            pads=[1, 1, 1, 1])],

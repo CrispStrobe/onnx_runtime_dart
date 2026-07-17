@@ -120,19 +120,18 @@ Tensor tensorFromProto(TensorProto t, {ExternalDataResolver? ext}) {
     }
     return Tensor.float(out, shape);
   } else if (t.dataType == _kUint8 || t.dataType == _kInt8) {
-    // Quantized weights / zero points, widened to int64. int32_data is the
-    // inline carrier for both per the proto spec.
+    // Quantized weights / zero points — kept in compact 1-byte storage
+    // (int32_data is the inline carrier for both per the proto spec).
+    final signed = t.dataType == _kInt8;
     if (t.int32Data.isNotEmpty) {
-      return Tensor.int64(Int64List.fromList(t.int32Data), shape);
+      return signed
+          ? Tensor.int8(Int8List.fromList(t.int32Data), shape)
+          : Tensor.uint8(Uint8List.fromList(t.int32Data), shape);
     }
     final bytes = _rawBytes(t, ext);
-    final out = Int64List(n);
-    final signed = t.dataType == _kInt8;
-    for (int i = 0; i < n; i++) {
-      final b = bytes[i];
-      out[i] = signed && b > 127 ? b - 256 : b;
-    }
-    return Tensor.int64(out, shape);
+    return signed
+        ? Tensor.int8(Int8List.sublistView(bytes, 0, n), shape)
+        : Tensor.uint8(Uint8List.sublistView(bytes, 0, n), shape);
   } else if (t.dataType == _kBool) {
     // BOOL is one byte per element, carried as int64 0/1.
     final bytes = _rawBytes(t, ext);
