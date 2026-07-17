@@ -8,6 +8,7 @@ import 'dart:typed_data';
 import 'onnx.pb.dart';
 import 'onnx_nn_ops.dart' as nn;
 import 'onnx_ops.dart' as ops;
+import 'onnx_rnn_ops.dart' as rnn;
 import 'onnx_proto_loader.dart';
 import 'tensor.dart';
 
@@ -113,9 +114,14 @@ class OnnxGraphExecutor {
   Map<String, Tensor> run(Map<String, Tensor> inputs, List<String> outputNames,
       {ExecutionProfile? profile}) {
     final values = <String, Tensor>{..._initializers, ...inputs};
-    final sw = profile == null ? null : Stopwatch();
+    _execNodes(_nodes, values, profile);
+    return {for (final name in outputNames) name: values[name]!};
+  }
 
-    for (final node in _nodes) {
+  void _execNodes(List<NodeProto> nodes, Map<String, Tensor> values,
+      ExecutionProfile? profile) {
+    final sw = profile == null ? null : Stopwatch();
+    for (final node in nodes) {
       final attrs = _AttrMap(node.attribute);
       final ins = [
         for (final name in node.input) name.isEmpty ? null : values[name]
@@ -123,7 +129,18 @@ class OnnxGraphExecutor {
       List<Tensor> outs;
       sw?..reset()..start();
       try {
-        outs = _dispatch(node, ins, attrs);
+        // Control-flow ops run subgraphs against the current scope, so they
+        // are handled here rather than in the pure-function dispatch.
+        switch (node.opType) {
+          case 'If':
+            final branch = ins[0]!.getI(0) != 0 ? 'then_branch' : 'else_branch';
+            outs = _execSubgraph(attrs.getGraph(branch)!, values, const [],
+                profile);
+          case 'Loop':
+            outs = _runLoop(node, ins, attrs, values, profile);
+          default:
+            outs = _dispatch(node, ins, attrs);
+        }
       } catch (e) {
         throw StateError('ONNX graph execution failed at node "${node.name}" '
             '(op=${node.opType}): $e');
@@ -139,13 +156,86 @@ class OnnxGraphExecutor {
         if (node.output[k].isNotEmpty) values[node.output[k]] = outs[k];
       }
     }
+  }
 
-    return {for (final name in outputNames) name: values[name]!};
+  /// Executes a subgraph attribute with the enclosing scope visible
+  /// (ONNX subgraphs capture outer values by name), binding [boundInputs]
+  /// positionally to the subgraph's declared inputs. Returns the subgraph's
+  /// outputs in declaration order.
+  List<Tensor> _execSubgraph(GraphProto g, Map<String, Tensor> outer,
+      List<Tensor?> boundInputs, ExecutionProfile? profile) {
+    final values = Map.of(outer);
+    for (final t in g.initializer) {
+      values[t.name] = tensorFromProto(t);
+    }
+    for (int k = 0; k < g.input.length && k < boundInputs.length; k++) {
+      if (boundInputs[k] != null) values[g.input[k].name] = boundInputs[k]!;
+    }
+    _execNodes(g.node, values, profile);
+    return [for (final o in g.output) values[o.name]!];
+  }
+
+  /// `Loop` — inputs `[M?, cond?, v_1..v_N]`; body graph inputs
+  /// `[iter, cond, v_1..v_N]`, outputs `[cond, v_1..v_N, scan_1..scan_K]`.
+  /// Node outputs are the final `v` values, then each scan output stacked
+  /// along a new leading axis.
+  List<Tensor> _runLoop(NodeProto node, List<Tensor?> ins, _AttrMap attrs,
+      Map<String, Tensor> values, ExecutionProfile? profile) {
+    final body = attrs.getGraph('body')!;
+    final maxTrips = ins.isNotEmpty && ins[0] != null ? ins[0]!.getI(0) : null;
+    bool cond = ins.length < 2 || ins[1] == null || ins[1]!.getI(0) != 0;
+    var carried = [for (int k = 2; k < ins.length; k++) ins[k]!];
+    final nCarried = carried.length;
+    final nScan = body.output.length - 1 - nCarried;
+    final scans = List.generate(nScan, (_) => <Tensor>[]);
+
+    int iter = 0;
+    while (cond && (maxTrips == null || iter < maxTrips)) {
+      final outs = _execSubgraph(
+          body,
+          values,
+          [Tensor.scalarInt(iter), Tensor.scalarInt(cond ? 1 : 0), ...carried],
+          profile);
+      cond = outs[0].getI(0) != 0;
+      carried = outs.sublist(1, 1 + nCarried);
+      for (int k = 0; k < nScan; k++) {
+        scans[k].add(outs[1 + nCarried + k]);
+      }
+      iter++;
+    }
+
+    return [
+      ...carried,
+      for (final steps in scans) _stack(steps),
+    ];
+  }
+
+  /// Stacks per-iteration tensors along a new leading axis (scan outputs).
+  static Tensor _stack(List<Tensor> steps) {
+    if (steps.isEmpty) return Tensor.float(Float32List(0), const [0]);
+    final inner = steps.first.shape;
+    final shape = [steps.length, ...inner];
+    if (steps.first.isFloat) {
+      final out = Float32List(steps.length * steps.first.length);
+      for (int k = 0; k < steps.length; k++) {
+        out.setRange(k * steps.first.length, (k + 1) * steps.first.length,
+            steps[k].f!);
+      }
+      return Tensor.float(out, shape);
+    }
+    final out = Int64List(steps.length * steps.first.length);
+    for (int k = 0; k < steps.length; k++) {
+      out.setRange(
+          k * steps.first.length, (k + 1) * steps.first.length, steps[k].i!);
+    }
+    return Tensor.int64(out, shape);
   }
 
   List<Tensor> _dispatch(NodeProto node, List<Tensor?> ins, _AttrMap attrs) {
     Tensor need(int i) => ins[i]!;
     switch (node.opType) {
+      case 'Identity':
+        return [need(0)];
       case 'Add':
         return [ops.opAdd(need(0), need(1))];
       case 'Sub':
@@ -437,6 +527,69 @@ class OnnxGraphExecutor {
         ];
       case 'PRelu':
         return [ops.opPRelu(need(0), need(1))];
+      case 'Size':
+        return [ops.opSize(need(0))];
+      case 'Pad':
+        // Opset 11+ takes pads/value/axes as inputs; opset 2 as attributes.
+        final padsList = ins.length > 1 && ins[1] != null
+            ? ins[1]!.asIntList().toList()
+            : attrs.getInts('pads')!;
+        return [
+          ops.opPad(
+            need(0),
+            padsList,
+            mode: attrs.getString('mode') ?? 'constant',
+            constantValue: ins.length > 2 && ins[2] != null
+                ? ins[2]!.getD(0)
+                : attrs.getFloat('value') ?? 0,
+            axes: ins.length > 3 && ins[3] != null
+                ? ins[3]!.asIntList().toList()
+                : null,
+          )
+        ];
+      // --- recurrent family ---
+      case 'LSTM':
+        return rnn.opLSTM(
+          need(0),
+          need(1),
+          need(2),
+          b: ins.length > 3 ? ins[3] : null,
+          sequenceLens: ins.length > 4 ? ins[4] : null,
+          initialH: ins.length > 5 ? ins[5] : null,
+          initialC: ins.length > 6 ? ins[6] : null,
+          peepholes: ins.length > 7 ? ins[7] : null,
+          hiddenSize: attrs.getInt('hidden_size')!,
+          direction: attrs.getString('direction') ?? 'forward',
+          activations: attrs.getStrings('activations'),
+          clip: attrs.getFloat('clip'),
+        );
+      case 'GRU':
+        return rnn.opGRU(
+          need(0),
+          need(1),
+          need(2),
+          b: ins.length > 3 ? ins[3] : null,
+          sequenceLens: ins.length > 4 ? ins[4] : null,
+          initialH: ins.length > 5 ? ins[5] : null,
+          hiddenSize: attrs.getInt('hidden_size')!,
+          direction: attrs.getString('direction') ?? 'forward',
+          activations: attrs.getStrings('activations'),
+          linearBeforeReset: (attrs.getInt('linear_before_reset') ?? 0) != 0,
+          clip: attrs.getFloat('clip'),
+        );
+      case 'RNN':
+        return rnn.opRNN(
+          need(0),
+          need(1),
+          need(2),
+          b: ins.length > 3 ? ins[3] : null,
+          sequenceLens: ins.length > 4 ? ins[4] : null,
+          initialH: ins.length > 5 ? ins[5] : null,
+          hiddenSize: attrs.getInt('hidden_size')!,
+          direction: attrs.getString('direction') ?? 'forward',
+          activations: attrs.getStrings('activations'),
+          clip: attrs.getFloat('clip'),
+        );
       default:
         throw UnsupportedError(
             'ONNX op "${node.opType}" not implemented in the Dart interpreter');
@@ -459,6 +612,14 @@ class _AttrMap {
   List<int>? getInts(String name) => _byName.containsKey(name)
       ? _byName[name]!.ints.map((v) => v.toInt()).toList()
       : null;
+  List<String>? getStrings(String name) => _byName.containsKey(name)
+      ? _byName[name]!
+          .strings
+          .map((s) => String.fromCharCodes(s))
+          .toList()
+      : null;
+  GraphProto? getGraph(String name) =>
+      _byName.containsKey(name) ? _byName[name]!.g : null;
 
   /// The tensor value of a TENSOR-typed attribute (e.g. `ConstantOfShape`'s
   /// `value`), or null if absent.

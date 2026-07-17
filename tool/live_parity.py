@@ -27,9 +27,16 @@ def main():
 
     feed = {}
     for inp in sess.get_inputs():
+        # Dynamic dims: batch-like (leading / interior) -> 1, trailing -> seq.
+        nd = len(inp.shape)
         dims = [d if isinstance(d, int) and d > 0 else
-                (1 if i == 0 else seq) for i, d in enumerate(inp.shape)]
-        if inp.type == "tensor(int64)":
+                (seq if i == nd - 1 and i > 0 else 1)
+                for i, d in enumerate(inp.shape)]
+        if inp.name == "sr":  # sample-rate scalar (VAD-style audio models)
+            feed[inp.name] = np.array(16000, dtype=np.int64)
+        elif "state" in inp.name or "hidden" in inp.name:
+            feed[inp.name] = np.zeros(dims, np.float32)
+        elif inp.type == "tensor(int64)":
             n = int(np.prod(dims))
             if "mask" in inp.name:
                 v = np.ones(dims, np.int64)

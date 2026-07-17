@@ -184,34 +184,58 @@ Tensor opConv(
       return Tensor.float(out, [n, m, oh, ow]);
     }
 
-    // Depthwise direct loop.
+    // Depthwise: copy each channel once into a zero-padded buffer, then run
+    // completely branchless accumulation loops (the bounds checks in the
+    // naive loop cost more than the padded copy).
+    final hp = h + ph + p[2], wp = wd + pw + p[3];
+    final xpad = Float32List(hp * wp);
     for (int b = 0; b < n; b++) {
       for (int om = 0; om < m; om++) {
-        final g = om ~/ mPerGroup;
+        final xBase = (b * cIn + om) * h * wd;
+        xpad.fillRange(0, xpad.length, 0);
+        for (int y = 0; y < h; y++) {
+          xpad.setRange((y + ph) * wp + pw, (y + ph) * wp + pw + wd, xf,
+              xBase + y * wd);
+        }
         final acc0 = bf == null ? 0.0 : bf[om];
-        final wBase = om * cPerGroup * kh * kw;
+        final wBase = om * kh * kw;
         final outBase = (b * m + om) * oh * ow;
         for (int oy = 0; oy < oh; oy++) {
-          final iy0 = oy * sh - ph;
-          for (int ox = 0; ox < ow; ox++) {
-            final ix0 = ox * sw - pw;
-            double acc = acc0;
-            for (int c = 0; c < cPerGroup; c++) {
-              final xBase = (b * cIn + g * cPerGroup + c) * h * wd;
-              final wcBase = wBase + c * kh * kw;
-              for (int ky = 0; ky < kh; ky++) {
-                final iy = iy0 + ky * dh;
-                if (iy < 0 || iy >= h) continue;
-                final xRow = xBase + iy * wd;
-                final wRow = wcBase + ky * kw;
-                for (int kx = 0; kx < kw; kx++) {
-                  final ix = ix0 + kx * dw;
-                  if (ix < 0 || ix >= wd) continue;
-                  acc += xf[xRow + ix] * wf[wRow + kx];
-                }
+          final iyRow = oy * sh * wp;
+          final oRow = outBase + oy * ow;
+          int ox = 0;
+          // 4-wide unroll over output x for instruction-level parallelism.
+          for (; ox + 4 <= ow; ox += 4) {
+            final i0 = iyRow + ox * sw;
+            double a0 = acc0, a1 = acc0, a2 = acc0, a3 = acc0;
+            for (int ky = 0; ky < kh; ky++) {
+              final xRow = i0 + ky * dh * wp;
+              final wRow = wBase + ky * kw;
+              for (int kx = 0; kx < kw; kx++) {
+                final wv = wf[wRow + kx];
+                final xi = xRow + kx * dw;
+                a0 += xpad[xi] * wv;
+                a1 += xpad[xi + sw] * wv;
+                a2 += xpad[xi + 2 * sw] * wv;
+                a3 += xpad[xi + 3 * sw] * wv;
               }
             }
-            out[outBase + oy * ow + ox] = acc;
+            out[oRow + ox] = a0;
+            out[oRow + ox + 1] = a1;
+            out[oRow + ox + 2] = a2;
+            out[oRow + ox + 3] = a3;
+          }
+          for (; ox < ow; ox++) {
+            double acc = acc0;
+            final i0 = iyRow + ox * sw;
+            for (int ky = 0; ky < kh; ky++) {
+              final xRow = i0 + ky * dh * wp;
+              final wRow = wBase + ky * kw;
+              for (int kx = 0; kx < kw; kx++) {
+                acc += xpad[xRow + kx * dw] * wf[wRow + kx];
+              }
+            }
+            out[oRow + ox] = acc;
           }
         }
       }

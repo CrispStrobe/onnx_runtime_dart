@@ -17,6 +17,11 @@ Native ORT reference on identical inputs (`onnxruntime` 1.27.0 CPU):
 Caveat: this machine runs other dev workloads; min-of-15-iters is the robust
 number, means can inflate 2–3× under contention.
 
+Pending: the padded-buffer depthwise-conv fast path and the recurrent /
+control-flow additions landed while the machine was at load-avg ~70 — their
+wall-clock impact still needs a quiet-machine measurement (parity is verified;
+Silero VAD runs cosine-1.0 incl. LSTM + If + reflect-Pad).
+
 ## Vision models (224×224, batch 1, cosine-1.0 parity vs ORT throughout)
 
 | Date | Change | MobileNetV2 | ResNet18 |

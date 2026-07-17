@@ -5,19 +5,20 @@ native `onnxruntime` — the graph is interpreted in plain Dart, so the same cod
 runs on **every Dart/Flutter target, including the web and WebAssembly**.
 
 It implements the operator set used by **transformer / attention** style models
-(BERT-family text embedders, rerankers, and RoPE / ALiBi variants) plus the
-**convolution / pooling** family used by CNN vision models. It is still not a
-complete ONNX runtime — notably there are no recurrent (LSTM/GRU), control-flow
-(`If`/`Loop`/`Scan`) or quantized ops yet.
+(BERT-family text embedders, rerankers, and RoPE / ALiBi variants), the
+**convolution / pooling** family used by CNN vision models, **recurrent** ops
+(`LSTM`/`GRU`/`RNN`) and **control flow** (`If`/`Loop` with subgraph
+execution). It is still not a complete ONNX runtime — notably `Scan`,
+`Einsum` beyond two known patterns, and quantized ops are missing.
 
 Verified to **cosine-1.0 parity** against ONNX Runtime (via `ort`), max abs diff
 ~1e-6 (float32 rounding), on: `jina-embeddings-v2-base-en` (BERT + ALiBi),
 `bge-small-en-v1.5`, `all-MiniLM-L6-v2`, `ms-marco-MiniLM` (cross-encoder
 reranker), the `nllb-200-600M` encoder (seq2seq / mBART), a 0.6B **RoPE**
-embedder (external-data weights), and the vision CNNs **MobileNetV2** and
-**ResNet18**. Every op is additionally covered by generated per-op parity
-fixtures against native ONNX Runtime (`test/fixtures/`, see
-`tool/gen_fixtures.py`).
+embedder (external-data weights), the vision CNNs **MobileNetV2** and
+**ResNet18**, and **Silero VAD** (Conv1D + LSTM + `If` + reflect-`Pad`).
+Every op is additionally covered by generated per-op parity fixtures against
+native ONNX Runtime (`test/fixtures/`, see `tool/gen_fixtures.py`).
 
 Execution uses a packed, register-tiled **`Float32x4` SIMD GEMM kernel** on
 native targets (scalar fallback on web), im2col convolution, load-time
@@ -79,6 +80,12 @@ self-contained, runnable graph built with the protobuf types.
   (nearest + linear), `Flatten`.
 - **Activations:** `LeakyRelu`, `Elu`, `PRelu`, `HardSigmoid`, `HardSwish`,
   `Softplus`, `Gelu` (erf + tanh forms).
+- **Recurrent:** `LSTM` (incl. peepholes), `GRU` (incl. linear_before_reset),
+  `RNN` — forward / reverse / bidirectional, `sequence_lens`,
+  `initial_h`/`initial_c`; default activations only.
+- **Control flow / misc:** `If`, `Loop` (subgraphs capture the outer scope;
+  scan outputs supported), `Identity`, `Pad` (constant / reflect / edge),
+  `Size`.
 
 Tensors are float32 or int64 (int32 and bool are widened to int64), row-major
 (matching ONNX's own layout). An unimplemented op throws `UnsupportedError`

@@ -413,16 +413,39 @@ Tensor opPow(Tensor a, Tensor b) {
 }
 
 Tensor _elementwiseUnary(Tensor a, double Function(double) op) {
-  final out = Float32List(a.length);
-  for (int k = 0; k < a.length; k++) {
-    out[k] = op(a.getD(k));
+  // Hoist the length (Tensor.length is a computed getter — in the loop
+  // condition it would re-fold the shape every iteration) and skip getD's
+  // per-element dtype branch.
+  final n = a.length;
+  final out = Float32List(n);
+  final af = a.f;
+  if (af != null) {
+    for (int k = 0; k < n; k++) {
+      out[k] = op(af[k]);
+    }
+  } else {
+    final ai = a.i!;
+    for (int k = 0; k < n; k++) {
+      out[k] = op(ai[k].toDouble());
+    }
   }
   return Tensor.float(out, a.shape);
 }
 
 Tensor opSqrt(Tensor a) => _elementwiseUnary(a, (x) => math.sqrt(x));
 Tensor opReciprocal(Tensor a) => _elementwiseUnary(a, (x) => 1.0 / x);
-Tensor opRelu(Tensor a) => _elementwiseUnary(a, (x) => x < 0 ? 0.0 : x);
+// Direct loop: Relu runs over every activation map in CNNs.
+Tensor opRelu(Tensor a) {
+  final af = a.f;
+  if (af == null) return _elementwiseUnary(a, (x) => x < 0 ? 0.0 : x);
+  final n = af.length;
+  final out = Float32List(n);
+  for (int k = 0; k < n; k++) {
+    final v = af[k];
+    out[k] = v < 0 ? 0.0 : v;
+  }
+  return Tensor.float(out, a.shape);
+}
 Tensor opLeakyRelu(Tensor a, double alpha) =>
     _elementwiseUnary(a, (x) => x < 0 ? alpha * x : x);
 Tensor opElu(Tensor a, double alpha) =>
@@ -491,8 +514,9 @@ Tensor opCast(Tensor x, int to) {
   // ONNX TensorProto.DataType: 1=FLOAT, 6=INT32, 7=INT64, 9=BOOL, 11=DOUBLE.
   // We carry both int32 and int64 as our int64 tensor, and bool as int64 0/1.
   if (to == 9) {
-    final out = Int64List(x.length);
-    for (int k = 0; k < x.length; k++) {
+    final n = x.length;
+    final out = Int64List(n);
+    for (int k = 0; k < n; k++) {
       out[k] = x.getD(k) != 0 ? 1 : 0;
     }
     return Tensor.int64(out, x.shape);
@@ -1103,8 +1127,9 @@ double _tanh(double x) {
 }
 
 Tensor _unaryInt(Tensor a, int Function(int) op) {
-  final out = Int64List(a.length);
-  for (int k = 0; k < a.length; k++) {
+  final n = a.length;
+  final out = Int64List(n);
+  for (int k = 0; k < n; k++) {
     out[k] = op(a.getI(k));
   }
   return Tensor.int64(out, a.shape);
@@ -1202,6 +1227,80 @@ Tensor opWhere(Tensor cond, Tensor a, Tensor b) {
     advance();
   }
   return Tensor.float(out, outShape);
+}
+
+/// `Size` — total element count as an int64 scalar.
+Tensor opSize(Tensor x) => Tensor.scalarInt(x.length);
+
+/// `Pad` — constant / reflect / edge modes over any rank. [pads] is
+/// `[begin_0..begin_r, end_0..end_r]`; with [axes] (opset 18+) it lists only
+/// the entries for those axes, in the same begin-then-end layout.
+Tensor opPad(Tensor x, List<int> pads, {
+  String mode = 'constant',
+  double constantValue = 0,
+  List<int>? axes,
+}) {
+  final rank = x.rank;
+  final beg = List<int>.filled(rank, 0);
+  final end = List<int>.filled(rank, 0);
+  if (axes == null) {
+    for (int a = 0; a < rank; a++) {
+      beg[a] = pads[a];
+      end[a] = pads[rank + a];
+    }
+  } else {
+    for (int k = 0; k < axes.length; k++) {
+      final a = axes[k] < 0 ? axes[k] + rank : axes[k];
+      beg[a] = pads[k];
+      end[a] = pads[axes.length + k];
+    }
+  }
+  final outShape = [
+    for (int a = 0; a < rank; a++) x.shape[a] + beg[a] + end[a]
+  ];
+  final n = outShape.fold<int>(1, (a, b) => a * b);
+  final srcStrides = x.strides;
+  final coords = List<int>.filled(rank, 0);
+  final isFloat = x.isFloat;
+  final outF = isFloat ? Float32List(n) : null;
+  final outI = isFloat ? null : Int64List(n);
+
+  for (int idx = 0; idx < n; idx++) {
+    int srcOff = 0;
+    bool inside = true;
+    for (int a = 0; a < rank; a++) {
+      int i = coords[a] - beg[a];
+      final dim = x.shape[a];
+      if (i < 0 || i >= dim) {
+        switch (mode) {
+          case 'reflect':
+            // Mirror without repeating the border sample.
+            while (i < 0 || i >= dim) {
+              if (i < 0) i = -i;
+              if (i >= dim) i = 2 * dim - 2 - i;
+            }
+          case 'edge':
+            i = i < 0 ? 0 : dim - 1;
+          default: // constant
+            inside = false;
+        }
+      }
+      if (!inside) break;
+      srcOff += i * srcStrides[a];
+    }
+    if (isFloat) {
+      outF![idx] = inside ? x.f![srcOff] : constantValue;
+    } else {
+      outI![idx] = inside ? x.i![srcOff] : constantValue.toInt();
+    }
+    for (int a = rank - 1; a >= 0; a--) {
+      if (++coords[a] < outShape[a]) break;
+      coords[a] = 0;
+    }
+  }
+  return isFloat
+      ? Tensor.float(outF!, outShape)
+      : Tensor.int64(outI!, outShape);
 }
 
 /// `Range(start, limit, delta)` — a 1-D sequence, int64 if the bounds are int.

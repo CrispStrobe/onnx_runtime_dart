@@ -34,7 +34,11 @@ def tensor_json(a: np.ndarray) -> dict:
 
 
 def dtype_of(a: np.ndarray) -> int:
-    return TensorProto.FLOAT if a.dtype == np.float32 else TensorProto.INT64
+    if a.dtype == np.float32:
+        return TensorProto.FLOAT
+    if a.dtype == np.int32:
+        return TensorProto.INT32
+    return TensorProto.INT64
 
 
 def emit(name: str, nodes, inputs: dict, initializers: dict | None = None,
@@ -49,13 +53,9 @@ def emit(name: str, nodes, inputs: dict, initializers: dict | None = None,
         name,
         [helper.make_tensor_value_info(k, dtype_of(v), v.shape)
          for k, v in inputs.items()],
-        [helper.make_tensor_value_info(o, TensorProto.FLOAT, None)
-         for o in out_names],
+        [helper.make_empty_tensor_value_info(o) for o in out_names],
         initializer=[
-            helper.make_tensor(k, dtype_of(v), v.shape,
-                               v.astype(np.float32).tobytes()
-                               if v.dtype == np.float32 else
-                               v.astype(np.int64).tobytes(), raw=True)
+            helper.make_tensor(k, dtype_of(v), v.shape, v.tobytes(), raw=True)
             for k, v in initializers.items()],
     )
     model = helper.make_model(
@@ -280,6 +280,146 @@ def main():
     emit("gelu_tanh",
          [helper.make_node("Gelu", ["x"], ["out0"], approximate="tanh")],
          {"x": f32(3, 4, 5)}, opset=20)
+
+    # ---- A3: recurrent ops ----
+    # Dim shorthand: seq=3, batch=2, input=4, hidden=5.
+    S, B, I, H = 3, 2, 4, 5
+
+    def rnn_like(name, op, gates, n_out, dirs=1, direction=None, bias=False,
+                 seq_lens=None, init_h=False, init_c=False, peep=False,
+                 **attrs):
+        ins = ["x", "w", "r"]
+        inits = {"w": f32(dirs, gates * H, I), "r": f32(dirs, gates * H, H)}
+        opt = [("b", bias, lambda: f32(dirs, 2 * gates * H)),
+               ("lens", seq_lens is not None,
+                lambda: np.array(seq_lens, dtype=np.int32)),
+               ("h0", init_h, lambda: f32(dirs, B, H)),
+               ("c0", init_c, lambda: f32(dirs, B, H)),
+               ("p", peep, lambda: f32(dirs, 3 * H))]
+        for nm, use, make in opt:
+            if use:
+                ins.append(nm)
+                inits[nm] = make()
+            else:
+                ins.append("")
+        while ins and ins[-1] == "":
+            ins.pop()
+        if op != "LSTM":  # no c0/p inputs
+            ins = ins[:6]
+        if direction:
+            attrs["direction"] = direction
+        emit(name,
+             [helper.make_node(op, ins, [f"out{i}" for i in range(n_out)],
+                               hidden_size=H, **attrs)],
+             {"x": f32(S, B, I)}, initializers=inits, n_outputs=n_out)
+
+    rnn_like("lstm_forward", "LSTM", 4, 3)
+    rnn_like("lstm_bias", "LSTM", 4, 3, bias=True)
+    rnn_like("lstm_reverse", "LSTM", 4, 3, direction="reverse", bias=True)
+    rnn_like("lstm_bidir", "LSTM", 4, 3, dirs=2, direction="bidirectional",
+             bias=True)
+    rnn_like("lstm_initial_hc", "LSTM", 4, 3, init_h=True, init_c=True)
+    rnn_like("lstm_seqlens", "LSTM", 4, 3, bias=True, seq_lens=[3, 2])
+    rnn_like("lstm_seqlens_reverse", "LSTM", 4, 3, direction="reverse",
+             seq_lens=[2, 3])
+    rnn_like("lstm_bidir_seqlens", "LSTM", 4, 3, dirs=2,
+             direction="bidirectional", seq_lens=[3, 1], init_h=True,
+             init_c=True)
+    rnn_like("lstm_peepholes", "LSTM", 4, 3, bias=True, peep=True)
+    rnn_like("gru_forward", "GRU", 3, 2)
+    rnn_like("gru_bias", "GRU", 3, 2, bias=True)
+    rnn_like("gru_lbr", "GRU", 3, 2, bias=True, linear_before_reset=1)
+    rnn_like("gru_bidir", "GRU", 3, 2, dirs=2, direction="bidirectional",
+             bias=True, init_h=True)
+    rnn_like("gru_seqlens", "GRU", 3, 2, bias=True, seq_lens=[2, 3])
+    rnn_like("rnn_forward", "RNN", 1, 2)
+    rnn_like("rnn_reverse_bias", "RNN", 1, 2, direction="reverse", bias=True)
+    rnn_like("rnn_bidir", "RNN", 1, 2, dirs=2, direction="bidirectional",
+             bias=True, init_h=True)
+
+    # ---- Pad + Size (needed by Silero VAD's STFT front-end) ----
+    def pad(name, x, pads, mode="constant", value=None, axes=None, opset=OPSET):
+        ins = ["x", "pads"]
+        inits = {"pads": np.array(pads, dtype=np.int64)}
+        if value is not None:
+            ins.append("cv")
+            inits["cv"] = np.array(value, dtype=np.float32)
+        if axes is not None:
+            if value is None:
+                ins.append("")
+            ins.append("axes")
+            inits["axes"] = np.array(axes, dtype=np.int64)
+        emit(name, [helper.make_node("Pad", ins, ["out0"], mode=mode)],
+             {"x": x}, initializers=inits, opset=opset)
+
+    pad("pad_constant_default", f32(2, 3), [1, 0, 0, 2])
+    pad("pad_constant_value", f32(2, 3), [1, 1, 1, 1], value=7.5)
+    pad("pad_reflect", f32(1, 1, 8), [0, 0, 3, 0, 0, 3], mode="reflect")
+    pad("pad_edge", f32(2, 4), [0, 2, 1, 0], mode="edge")
+    pad("pad_axes", f32(2, 3, 4), [2, 1], axes=[-1], opset=18)
+    emit("size_op", [helper.make_node("Size", ["x"], ["out0"])],
+         {"x": f32(2, 3, 4)})
+
+    # ---- A4: control flow ----
+    def vi(name, dt, shape):
+        return helper.make_tensor_value_info(name, dt, shape)
+
+    def if_fixture(name, cond_val):
+        then_g = helper.make_graph(
+            [helper.make_node("Add", ["x", "k"], ["res"])], "then_branch",
+            [], [vi("res", TensorProto.FLOAT, [2, 3])])
+        else_g = helper.make_graph(
+            [helper.make_node("Sub", ["x", "k"], ["res_e"])], "else_branch",
+            [], [vi("res_e", TensorProto.FLOAT, [2, 3])])
+        emit(name,
+             [helper.make_node("Cast", ["c"], ["cb"], to=TensorProto.BOOL),
+              helper.make_node("If", ["cb"], ["out0"], then_branch=then_g,
+                               else_branch=else_g)],
+             {"x": f32(2, 3)},
+             initializers={"k": f32(2, 3),
+                           "c": np.array(cond_val, dtype=np.int64)})
+
+    if_fixture("if_then", 1)
+    if_fixture("if_else", 0)
+
+    # Fixed trip count: v = x, 3 iterations of v *= k; scan collects each v.
+    loop_body = helper.make_graph(
+        [helper.make_node("Identity", ["cond_in"], ["cond_out"]),
+         helper.make_node("Mul", ["v_in", "k"], ["v_out"]),
+         helper.make_node("Identity", ["v_out"], ["scan_out"])],
+        "loop_body",
+        [vi("iter_num", TensorProto.INT64, []),
+         vi("cond_in", TensorProto.BOOL, []),
+         vi("v_in", TensorProto.FLOAT, [2, 3])],
+        [vi("cond_out", TensorProto.BOOL, []),
+         vi("v_out", TensorProto.FLOAT, [2, 3]),
+         vi("scan_out", TensorProto.FLOAT, [2, 3])])
+    emit("loop_fixed_trip",
+         [helper.make_node("Loop", ["M", "", "x"], ["out0", "out1"],
+                           body=loop_body)],
+         {"x": f32(2, 3)},
+         initializers={"k": f32(2, 3),
+                       "M": np.array(3, dtype=np.int64)},
+         n_outputs=2)
+
+    # Condition-terminated: run while iter < 2 (3 iterations: 0, 1, 2),
+    # v += x each time; captures outer x inside the body.
+    cond_body = helper.make_graph(
+        [helper.make_node("Less", ["iter_num", "limit"], ["cond_out"]),
+         helper.make_node("Add", ["v_in", "x"], ["v_out"])],
+        "cond_body",
+        [vi("iter_num", TensorProto.INT64, []),
+         vi("cond_in", TensorProto.BOOL, []),
+         vi("v_in", TensorProto.FLOAT, [2, 3])],
+        [vi("cond_out", TensorProto.BOOL, []),
+         vi("v_out", TensorProto.FLOAT, [2, 3])])
+    emit("loop_cond_terminated",
+         [helper.make_node("Cast", ["one"], ["cb"], to=TensorProto.BOOL),
+          helper.make_node("Loop", ["", "cb", "x"], ["out0"],
+                           body=cond_body)],
+         {"x": f32(2, 3)},
+         initializers={"limit": np.array(2, dtype=np.int64),
+                       "one": np.array(1, dtype=np.int64)})
 
     print("fixtures written to", FIXTURES)
 
