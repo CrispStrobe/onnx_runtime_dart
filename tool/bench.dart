@@ -1,7 +1,8 @@
 /// Wall-clock + per-op benchmark for a real model.
 ///
-///   dart run tool/bench.dart model.onnx [--seq N] [--iters N]
+///   dart run tool/bench.dart model.onnx [--seq N] [--iters N] [--workers N]
 ///
+/// With --workers the model runs through the isolate pool (`runAsync`).
 library;
 
 /// Inputs are synthesized from the graph's input signatures: int64 inputs get
@@ -15,7 +16,7 @@ import 'package:onnx_runtime_dart/onnx_proto.dart';
 import 'package:onnx_runtime_dart/onnx_runtime_dart.dart';
 import 'package:onnx_runtime_dart/onnx_runtime_dart_io.dart';
 
-void main(List<String> args) {
+Future<void> main(List<String> args) async {
   final modelPath = args.firstWhere((a) => !a.startsWith('--'));
   int flag(String name, int dflt) {
     final k = args.indexOf('--$name');
@@ -24,6 +25,7 @@ void main(List<String> args) {
 
   final seq = flag('seq', 16);
   final iters = flag('iters', 5);
+  final workers = flag('workers', 0);
 
   final meta = ModelProto.fromBuffer(
       Uint8List.fromList(File(modelPath).readAsBytesSync()));
@@ -71,23 +73,33 @@ void main(List<String> args) {
     stderr.writeln('input ${vi.name}: ${feed[vi.name]}');
   }
 
+  if (workers > 0) {
+    await model.parallelize(
+        workers: workers, poolConv: args.contains('--poolconv'));
+  }
+  Future<Map<String, Tensor>> once({ExecutionProfile? profile}) =>
+      workers > 0
+          ? model.runAsync(feed, [outName], profile: profile)
+          : Future.value(model.run(feed, [outName], profile: profile));
+
   // Warmup (JIT + any lazy decode), then timed iterations.
-  model.run(feed, [outName]);
+  await once();
   final times = <int>[];
   final profile = ExecutionProfile();
   for (int k = 0; k < iters; k++) {
     final sw = Stopwatch()..start();
-    model.run(feed, [outName], profile: profile);
+    await once(profile: profile);
     sw.stop();
     times.add(sw.elapsedMicroseconds);
   }
   times.sort();
   final mean = times.reduce((a, b) => a + b) / times.length;
-  final out = model.run(feed, [outName])[outName]!;
+  final out = (await once())[outName]!;
+  model.dispose();
   stderr.writeln('output $outName: ${out.shape} '
       'first4=${out.asFloatList().take(4).map((v) => v.toStringAsFixed(5)).toList()}');
   print('wall: min=${(times.first / 1000).toStringAsFixed(1)}ms '
       'mean=${(mean / 1000).toStringAsFixed(1)}ms over ${times.length} iters '
-      '(seq=$seq)');
+      '(seq=$seq${workers > 0 ? ', workers=$workers' : ''})');
   print(profile.report());
 }

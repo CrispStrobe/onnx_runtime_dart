@@ -71,10 +71,19 @@ class OnnxModel {
   /// executes those matmuls in parallel (results stay bitwise identical to
   /// [run]). Native targets only — throws [UnsupportedError] on the web.
   ///
+  /// [poolConv] opts 2-D convolutions into the pool as well (output-row
+  /// bands); measure before enabling — for typical CNN latencies the
+  /// activation copying outweighs the parallel compute.
+  ///
   /// Call [dispose] when done to shut the workers down.
-  Future<void> parallelize({required int workers, int minWeightElements = 65536}) =>
+  Future<void> parallelize(
+          {required int workers,
+          int minWeightElements = 65536,
+          bool poolConv = false}) =>
       _executor.parallelize(
-          workers: workers, minWeightElements: minWeightElements);
+          workers: workers,
+          minWeightElements: minWeightElements,
+          poolConv: poolConv);
 
   /// Like [run], but partitioned matmuls execute on the isolate pool set up
   /// by [parallelize]. Without a prior [parallelize] call it behaves exactly

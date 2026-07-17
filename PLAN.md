@@ -7,10 +7,12 @@
 > QuantizeLinear/DynamicQuantizeLinear produce compact outputs).
 > Quiet-machine benchmarks are in: MiniLM 66 ms sync / ≈42 ms with 4
 > workers (2.6× off 1-thread native ORT, from 48× at baseline);
-> MobileNetV2 260 ms, ResNet18 422 ms. Remaining follow-ups: Scan
-> non-default axes/directions; pool fan-out for Gemm/conv;
-> com.microsoft-domain ops (MatMulNBits for int4 models). Numbers in
-> `BENCHMARKS.md`;
+> MobileNetV2 260 ms, ResNet18 422 ms. MatMulNBits (int4) ✅ — Octen-int4
+> at cosine-1.0 with packed weights. Scan axes/directions ✅. Conv pool
+> fan-out implemented + bitwise-tested but **off by default**
+> (`parallelize(poolConv: true)`): activation copying outweighs banded
+> compute at CNN latencies. Remaining: Gemm pool fan-out; QLinear per-row
+> a-scales. Numbers in `BENCHMARKS.md`;
 > per-op ORT parity fixtures in `test/fixtures/` (`tool/gen_fixtures.py`),
 > live-model parity via `tool/live_parity.py|dart`.
 

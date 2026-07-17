@@ -99,6 +99,45 @@ void main() {
     }
   });
 
+  test('pooled conv fan-out == sync conv, bitwise', () async {
+    final g = GraphProto()
+      ..input.add(ValueInfoProto()..name = 'X')
+      ..output.add(ValueInfoProto()..name = 'Y')
+      ..initializer.addAll([
+        _floatInit('W', [8, 3, 3, 3]),
+        _floatInit('B', [8]),
+      ])
+      ..node.addAll([
+        NodeProto()
+          ..opType = 'Conv'
+          ..input.addAll(['X', 'W', 'B'])
+          ..output.add('C')
+          ..attribute.add(AttributeProto()
+            ..name = 'pads'
+            ..ints.addAll([Int64(1), Int64(1), Int64(1), Int64(1)])),
+        NodeProto()
+          ..opType = 'Relu'
+          ..input.add('C')
+          ..output.add('Y'),
+      ]);
+    final model =
+        OnnxModel.fromBytes((ModelProto()..graph = g).writeToBuffer());
+    final x = Tensor.float(
+        Float32List.fromList(
+            List.generate(3 * 16 * 12, (_) => _rng.nextDouble() * 2 - 1)),
+        [1, 3, 16, 12]);
+    final want = model.run({'X': x}, ['Y'])['Y']!;
+    await model.parallelize(workers: 3, poolConv: true);
+    try {
+      final got = (await model.runAsync({'X': x}, ['Y']))['Y']!;
+      expect(got.shape, want.shape);
+      expect(got.asFloatList(), want.asFloatList(),
+          reason: 'pooled conv must be bitwise-identical');
+    } finally {
+      model.dispose();
+    }
+  });
+
   test('runAsync without parallelize matches run', () async {
     final g = GraphProto()
       ..input.add(ValueInfoProto()..name = 'X')

@@ -46,7 +46,7 @@ def dtype_of(a: np.ndarray) -> int:
 
 
 def emit(name: str, nodes, inputs: dict, initializers: dict | None = None,
-         n_outputs: int = 1, opset: int = OPSET):
+         n_outputs: int = 1, opset: int = OPSET, ms_domain: bool = False):
     """Builds the model, runs ORT, writes the fixture directory."""
     initializers = initializers or {}
     out_names = [f"out{i}" for i in range(n_outputs)]
@@ -63,7 +63,9 @@ def emit(name: str, nodes, inputs: dict, initializers: dict | None = None,
             for k, v in initializers.items()],
     )
     model = helper.make_model(
-        graph, opset_imports=[helper.make_opsetid("", opset)])
+        graph,
+        opset_imports=[helper.make_opsetid("", opset)] +
+        ([helper.make_opsetid("com.microsoft", 1)] if ms_domain else []))
     model.ir_version = 8
 
     # ORT tolerates unshaped outputs; run first, then backfill the output
@@ -525,6 +527,42 @@ def main():
                        "yz": np.array(128, dtype=np.uint8),
                        "bias": RNG.integers(-500, 500, 4).astype(np.int32)})
 
+    # ---- MatMulNBits (com.microsoft, 4-bit block-quantized weights) ----
+    def pack_q4(wq):  # [N, K] values 0..15 -> [N, nblocks, block/2] packed
+        N, K = wq.shape
+        nb = (K + 31) // 32
+        padded = np.zeros((N, nb * 32), dtype=np.uint8)
+        padded[:, :K] = wq
+        blocks = padded.reshape(N, nb, 32)
+        return (blocks[:, :, 0::2] | (blocks[:, :, 1::2] << 4)).astype(
+            np.uint8)
+
+    def mmnb(name, M, K, N, zp=False):
+        wq = RNG.integers(0, 16, (N, K)).astype(np.uint8)
+        nb = (K + 31) // 32
+        inits = {"b": pack_q4(wq),
+                 "s": (RNG.standard_normal(N * nb) * 0.05 + 0.2).astype(
+                     np.float32)}
+        ins = ["a", "b", "s"]
+        if zp:
+            zpv = RNG.integers(0, 16, N * nb).astype(np.uint8)
+            packed = np.zeros((N * nb + 1) // 2, dtype=np.uint8)
+            packed[: len(zpv) // 2] = (zpv[0::2][: len(zpv) // 2] |
+                                       (zpv[1::2] << 4))
+            if len(zpv) % 2:
+                packed[-1] = zpv[-1]
+            inits["z"] = packed
+            ins.append("z")
+        emit(name,
+             [helper.make_node("MatMulNBits", ins, ["out0"], K=K, N=N,
+                               bits=4, block_size=32,
+                               domain="com.microsoft")],
+             {"a": f32(M, K)}, initializers=inits, ms_domain=True)
+
+    mmnb("matmulnbits_basic", 4, 64, 8)
+    mmnb("matmulnbits_zeropoints", 3, 64, 6, zp=True)
+    mmnb("matmulnbits_partial_block", 2, 40, 5)
+
     # ---- A4: control flow ----
     def vi(name, dt, shape):
         return helper.make_tensor_value_info(name, dt, shape)
@@ -618,6 +656,25 @@ def main():
                            body=scan_body2, num_scan_inputs=2)],
          {"xs": f32(3, 3), "ys": f32(3, 3)},
          initializers={"s0": f32(3), "k": f32(3)})
+
+    # Non-default axes/directions: slice xs along axis 1, reversed; stack
+    # the scan output along axis 1, reversed.
+    scan_body3 = helper.make_graph(
+        [helper.make_node("Add", ["s_in", "x_slice"], ["s_out"]),
+         helper.make_node("Identity", ["s_out"], ["scan_out"])],
+        "scan_body3",
+        [vi("s_in", TensorProto.FLOAT, [2]),
+         vi("x_slice", TensorProto.FLOAT, [2])],
+        [vi("s_out", TensorProto.FLOAT, [2]),
+         vi("scan_out", TensorProto.FLOAT, [2])])
+    emit("scan_axes_directions",
+         [helper.make_node("Scan", ["s0", "xs"], ["out0", "out1"],
+                           body=scan_body3, num_scan_inputs=1,
+                           scan_input_axes=[1], scan_input_directions=[1],
+                           scan_output_axes=[1], scan_output_directions=[1])],
+         {"xs": f32(2, 5)},
+         initializers={"s0": np.zeros(2, dtype=np.float32)},
+         n_outputs=2)
 
     print("fixtures written to", FIXTURES)
 

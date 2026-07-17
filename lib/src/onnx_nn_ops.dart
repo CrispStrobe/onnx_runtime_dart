@@ -68,6 +68,22 @@ import 'tensor.dart';
 
 int _prod(List<int> v) => v.fold(1, (a, b) => a * b);
 
+/// Output spatial dims for a Conv with these parameters (used by the
+/// executor to plan the isolate-pool band split without running the conv).
+List<int> convOutputSpatial(List<int> inSp, List<int> kernel,
+    List<int>? strides, List<int>? pads, List<int>? dilations,
+    String autoPad) {
+  final nd = inSp.length;
+  final (_, outSp) = _resolvePads(
+      inDims: inSp,
+      kernel: kernel,
+      strides: strides ?? List.filled(nd, 1),
+      dilations: dilations ?? List.filled(nd, 1),
+      autoPad: autoPad,
+      pads: pads);
+  return outSp;
+}
+
 // ---------------------------------------------------------------------------
 // Conv
 // ---------------------------------------------------------------------------
@@ -84,6 +100,8 @@ Tensor opConv(
   List<int>? dilations,
   int group = 1,
   String autoPad = 'NOTSET',
+  int? bandStart,
+  int? bandEnd,
 }) {
   final nd = x.rank - 2;
   assert(nd >= 1 && nd <= 3, 'Conv supports 1-3 spatial dims, got rank ${x.rank}');
@@ -106,13 +124,20 @@ Tensor opConv(
 
   final xf = x.asFloatList(), wf = w.asFloatList();
   final bf = bias?.asFloatList();
-  final out = Float32List(n * m * _prod(outSp));
   final mPerGroup = m ~/ group;
+  // Output-row band (2-D only): the isolate pool splits a conv by output
+  // rows; each call computes rows [b0, b1) and returns that slab.
+  final b0 = bandStart ?? 0;
+  assert(nd == 2 || (bandStart == null && bandEnd == null),
+      'Conv banding is only supported for 2-D convs');
+  final out = Float32List(nd == 2
+      ? n * m * ((bandEnd ?? outSp[0]) - b0) * outSp[1]
+      : n * m * _prod(outSp));
 
   if (nd == 2) {
     final h = inSp[0], wd = inSp[1];
     final kh = kernel[0], kw = kernel[1];
-    final oh = outSp[0], ow = outSp[1];
+    final oh = (bandEnd ?? outSp[0]) - b0, ow = outSp[1];
     final sh = s[0], sw = s[1], dh = d[0], dw = d[1], ph = p[0], pw = p[1];
 
     // Depthwise (1 in / 1 out channel per group): im2col+GEMM degenerates to
@@ -121,6 +146,10 @@ Tensor opConv(
 
     if (!depthwise) {
       // 1x1/stride-1/no-pad conv is exactly a GEMM over the existing layout.
+      // Banded calls skip the pointwise identity: with a partial output the
+      // GEMM view's column count (band*ow) no longer matches the channel
+      // stride (h*w), so the direct-view trick would misindex — im2col
+      // handles the band correctly.
       final pointwise = kh == 1 &&
           kw == 1 &&
           sh == 1 &&
@@ -128,7 +157,9 @@ Tensor opConv(
           ph == 0 &&
           pw == 0 &&
           p[2] == 0 &&
-          p[3] == 0;
+          p[3] == 0 &&
+          bandStart == null &&
+          bandEnd == null;
       final colRows = cPerGroup * kh * kw;
       final colN = oh * ow;
       final cols = pointwise ? null : Float32List(colRows * colN);
@@ -144,7 +175,7 @@ Tensor opConv(
                 for (int kx = 0; kx < kw; kx++) {
                   final row = ((c * kh + ky) * kw + kx) * colN;
                   for (int oy = 0; oy < oh; oy++) {
-                    final iy = oy * sh - ph + ky * dh;
+                    final iy = (oy + b0) * sh - ph + ky * dh;
                     if (iy < 0 || iy >= h) continue;
                     final xRow = xBase + iy * wd;
                     final colRow = row + oy * ow;
@@ -165,9 +196,10 @@ Tensor opConv(
           }
           final outOff = (b * m + g * mPerGroup) * colN;
           // Weight rows are already [mPerGroup × colRows] contiguously.
+          // Pointwise convs read the input rows matching the output band.
           gemm.matmulKernel(wf, g * mPerGroup * colRows, cols ?? xf,
-              cols == null ? xGroupBase : 0, out, outOff, mPerGroup, colRows,
-              colN);
+              cols == null ? xGroupBase + b0 * wd : 0, out, outOff, mPerGroup,
+              colRows, colN);
         }
       }
       if (bf != null) {
@@ -201,7 +233,7 @@ Tensor opConv(
         final wBase = om * kh * kw;
         final outBase = (b * m + om) * oh * ow;
         for (int oy = 0; oy < oh; oy++) {
-          final iyRow = oy * sh * wp;
+          final iyRow = (oy + b0) * sh * wp;
           final oRow = outBase + oy * ow;
           int ox = 0;
           // 4-wide unroll over output x for instruction-level parallelism.

@@ -300,18 +300,40 @@ class OnnxGraphExecutor {
   /// [minWeightElements] elements) across them by output column. After this,
   /// [runAsync] executes those matmuls on the pool; [run] stays
   /// single-threaded. Native targets only.
+  /// [poolConv] additionally fans 2-D convolutions out across the workers by
+  /// output-row bands. Off by default: conv messages carry the whole input
+  /// activation to every worker, and for CNN workloads measured so far that
+  /// copying costs more than the banded compute saves (unlike matmuls, whose
+  /// per-call messages are small). Worth trying for large batches or very
+  /// high-resolution inputs.
   Future<void> parallelize(
-      {required int workers, int minWeightElements = 65536}) async {
+      {required int workers,
+      int minWeightElements = 65536,
+      bool poolConv = false}) async {
     final toPartition = <String, (Float32List, int, int)>{};
+    final convToReplicate = <String, (Float32List, List<int>, Float32List?)>{};
     for (final node in _nodes) {
-      if (node.opType != 'MatMul' || node.input.length < 2) continue;
-      final name = node.input[1];
-      final t = _initializers[name];
-      if (t == null || !t.isFloat || t.rank != 2) continue;
-      if (t.length < minWeightElements) continue;
-      toPartition[name] = (t.f!, t.shape[0], t.shape[1]);
+      if (node.opType == 'Conv' && !poolConv) continue;
+      if (node.opType == 'MatMul' && node.input.length >= 2) {
+        final name = node.input[1];
+        final t = _initializers[name];
+        if (t == null || !t.isFloat || t.rank != 2) continue;
+        if (t.length < minWeightElements) continue;
+        toPartition[name] = (t.f!, t.shape[0], t.shape[1]);
+      } else if (node.opType == 'Conv' && node.input.length >= 2) {
+        final w = _initializers[node.input[1]];
+        if (w == null || !w.isFloat || w.rank != 4) continue;
+        final biasT =
+            node.input.length > 2 ? _initializers[node.input[2]] : null;
+        if (node.input.length > 2 &&
+            node.input[2].isNotEmpty &&
+            biasT == null) {
+          continue; // runtime bias — keep local
+        }
+        convToReplicate[node.input[1]] = (w.f!, w.shape, biasT?.f);
+      }
     }
-    _pool = await GemmPool.spawn(workers, toPartition);
+    _pool = await GemmPool.spawn(workers, toPartition, convToReplicate);
   }
 
   void dispose() {
@@ -340,6 +362,11 @@ class OnnxGraphExecutor {
             ? pool.weights[node.input[1]]
             : null;
         final a = part == null ? null : ins[0];
+        final convX = pool != null &&
+                node.opType == 'Conv' &&
+                pool.convWeights.contains(node.input[1])
+            ? ins[0]
+            : null;
         if (part != null &&
             a != null &&
             a.isFloat &&
@@ -351,6 +378,36 @@ class OnnxGraphExecutor {
           outs = [
             Tensor.float(out, [...a.shape.sublist(0, a.rank - 1), part.n])
           ];
+        } else if (convX != null && convX.isFloat && convX.rank == 4) {
+          final attrsC = attrs;
+          final w = _initializers[node.input[1]]!;
+          final strides = attrsC.getInts('strides');
+          final padsAttr = attrsC.getInts('pads');
+          final dilations = attrsC.getInts('dilations');
+          final autoPad = attrsC.getString('auto_pad') ?? 'NOTSET';
+          final outSp = nn.convOutputSpatial(convX.shape.sublist(2),
+              w.shape.sublist(2), strides, padsAttr, dilations, autoPad);
+          if (outSp[0] < pool!.workerCount * 2) {
+            outs = _dispatch(node, ins, attrs); // too few rows to split
+          } else {
+            final out = await pool.conv(
+              node.input[1],
+              convX.f!,
+              convX.shape,
+              strides: strides,
+              pads: padsAttr,
+              dilations: dilations,
+              group: attrsC.getInt('group') ?? 1,
+              autoPad: autoPad,
+              n: convX.shape[0],
+              m: w.shape[0],
+              oh: outSp[0],
+              ow: outSp[1],
+            );
+            outs = [
+              Tensor.float(out, [convX.shape[0], w.shape[0], ...outSp])
+            ];
+          }
         } else {
           switch (node.opType) {
             case 'If':
@@ -445,52 +502,81 @@ class OnnxGraphExecutor {
 
   /// `Scan` — inputs `[state_1..state_M, scan_1..scan_N]`; body graph maps
   /// `[states, scan slices] -> [states, scan output slices]`. Scan inputs
-  /// are sliced along axis 0, scan outputs stacked along a new axis 0
-  /// (only the default axes/directions are supported).
+  /// are sliced along their `scan_input_axes` (default 0), optionally
+  /// reversed; scan outputs stack along `scan_output_axes` (default a new
+  /// axis 0), optionally reversed.
   List<Tensor> _runScan(NodeProto node, List<Tensor?> ins, _AttrMap attrs,
       Map<String, Tensor> values, ExecutionProfile? profile) {
     final body = attrs.getGraph('body')!;
     final nScan = attrs.getInt('num_scan_inputs')!;
-    for (final attr in [
-      'scan_input_axes',
-      'scan_input_directions',
-      'scan_output_axes',
-      'scan_output_directions'
-    ]) {
-      final v = attrs.getInts(attr);
-      if (v != null && v.any((x) => x != 0)) {
-        throw UnsupportedError(
-            'Scan: only default $attr (all zero) supported, got $v');
-      }
-    }
+    final inAxesAttr = attrs.getInts('scan_input_axes');
+    final inDirs = attrs.getInts('scan_input_directions');
+    final outAxesAttr = attrs.getInts('scan_output_axes');
+    final outDirs = attrs.getInts('scan_output_directions');
+
     final nState = node.input.length - nScan;
     var states = [for (int k = 0; k < nState; k++) ins[k]!];
     final scanIns = [for (int k = nState; k < ins.length; k++) ins[k]!];
-    final iters = scanIns.isEmpty ? 0 : scanIns.first.shape[0];
+    final inAxes = [
+      for (int j = 0; j < nScan; j++)
+        () {
+          final a = inAxesAttr == null ? 0 : inAxesAttr[j];
+          return a < 0 ? a + scanIns[j].rank : a;
+        }()
+    ];
+    final iters = scanIns.isEmpty ? 0 : scanIns.first.shape[inAxes.first];
     final nScanOut = body.output.length - nState;
     final scans = List.generate(nScanOut, (_) => <Tensor>[]);
 
-    Tensor sliceRow(Tensor t, int i) {
-      final rowLen = t.length ~/ t.shape[0];
-      final shape = t.shape.sublist(1);
-      return t.isFloat
-          ? Tensor.float(
-              Float32List.sublistView(t.f!, i * rowLen, (i + 1) * rowLen),
-              shape)
-          : Tensor.int64(
-              Int64List.sublistView(t.i!, i * rowLen, (i + 1) * rowLen),
-              shape);
+    Tensor sliceAt(Tensor t, int axis, int i) {
+      if (axis == 0) {
+        final rowLen = t.length ~/ t.shape[0];
+        final shape = t.shape.sublist(1);
+        return t.isFloat
+            ? Tensor.float(
+                Float32List.sublistView(t.f!, i * rowLen, (i + 1) * rowLen),
+                shape)
+            : Tensor.int64(
+                Int64List.sublistView(t.i!, i * rowLen, (i + 1) * rowLen),
+                shape);
+      }
+      return ops.opSqueeze(
+          ops.opSlice(t, [i], [i + 1], [axis], null), [axis]);
     }
 
     for (int i = 0; i < iters; i++) {
-      final outs = _execSubgraph(body, values,
-          [...states, for (final t in scanIns) sliceRow(t, i)], profile);
+      final sliced = [
+        for (int j = 0; j < nScan; j++)
+          sliceAt(
+              scanIns[j],
+              inAxes[j],
+              inDirs != null && inDirs[j] == 1 ? iters - 1 - i : i)
+      ];
+      final outs =
+          _execSubgraph(body, values, [...states, ...sliced], profile);
       states = outs.sublist(0, nState);
       for (int k = 0; k < nScanOut; k++) {
         scans[k].add(outs[nState + k]);
       }
     }
-    return [...states, for (final steps in scans) _stack(steps)];
+
+    Tensor stackOut(int k) {
+      var steps = scans[k];
+      if (outDirs != null && outDirs[k] == 1) {
+        steps = steps.reversed.toList();
+      }
+      final axis = outAxesAttr == null ? 0 : outAxesAttr[k];
+      if (axis == 0) return _stack(steps);
+      final rank = steps.first.rank + 1;
+      final ax = axis < 0 ? axis + rank : axis;
+      return ops.opConcat(
+          [for (final s in steps) ops.opUnsqueeze(s, [ax])], ax);
+    }
+
+    return [
+      ...states,
+      for (int k = 0; k < nScanOut; k++) stackOut(k),
+    ];
   }
 
   /// `Loop` — inputs `[M?, cond?, v_1..v_N]`; body graph inputs
@@ -925,6 +1011,19 @@ class OnnxGraphExecutor {
           ql.opQLinearMatMul(need(0), need(1), ins[2], need(3), need(4),
               ins[5], need(6), ins.length > 7 ? ins[7] : null,
               lo: qmInt8 ? -128 : 0, hi: qmInt8 ? 127 : 255)
+        ];
+      case 'MatMulNBits':
+        if (node.input.length > 4) {
+          throw UnsupportedError(
+              'MatMulNBits: g_idx/bias inputs not supported');
+        }
+        return [
+          ql.opMatMulNBits(need(0), need(1), need(2),
+              ins.length > 3 ? ins[3] : null,
+              k: attrs.getInt('K')!,
+              n: attrs.getInt('N')!,
+              bits: attrs.getInt('bits') ?? 4,
+              blockSize: attrs.getInt('block_size')!)
         ];
       case 'QLinearConv':
         final qcInt8 = _initializerElemType[node.input[7]] == 3;

@@ -10,6 +10,8 @@ library;
 
 import 'dart:typed_data';
 
+import 'gemm_kernel_scalar.dart' if (dart.library.ffi) 'gemm_kernel_simd.dart'
+    as gemm;
 import 'tensor.dart';
 
 int _roundEven(double v) {
@@ -94,6 +96,56 @@ Tensor opQLinearMatMul(Tensor a, Tensor aS, Tensor? aZp, Tensor b, Tensor bS,
     out[i] = q < lo ? lo : (q > hi ? hi : q);
   }
   return Tensor.int64(out, acc.shape);
+}
+
+/// `MatMulNBits` (com.microsoft): `y = A · dequant(B)ᵀ`, B block-quantized
+/// to 4 bits. B is `[N, ceil(K/block_size), block_size/2]` packed low-nibble
+/// first; scales are one float per (column, block); zero points default to 8
+/// or come packed 4-bit the same way. The weight matrix is dequantized into
+/// a transposed [K×N] buffer per call (weights stay packed in memory — that
+/// is the point of int4 — and the GEMM rides the SIMD kernel).
+Tensor opMatMulNBits(Tensor a, Tensor bQ, Tensor scales, Tensor? zeroPoints,
+    {required int k, required int n, required int bits,
+    required int blockSize}) {
+  if (bits != 4) {
+    throw UnsupportedError('MatMulNBits: only bits=4 supported, got $bits');
+  }
+  final nBlocks = (k + blockSize - 1) ~/ blockSize;
+  final blobBytes = blockSize ~/ 2;
+  final bBytes = bQ.u8 ?? Uint8List.fromList(bQ.asIntList());
+  final sf = scales.asFloatList();
+  final zpBytes = zeroPoints?.u8;
+
+  // Dequantize into B^T [k × n] so the standard row-major GEMM applies.
+  final bt = Float32List(k * n);
+  for (int col = 0; col < n; col++) {
+    final colBase = col * nBlocks * blobBytes;
+    for (int blk = 0; blk < nBlocks; blk++) {
+      final scale = sf[col * nBlocks + blk];
+      double zp = 8;
+      if (zpBytes != null) {
+        // 4-bit packed zero points, one per (column, block).
+        final zpIdx = col * nBlocks + blk;
+        final byte = zpBytes[zpIdx >> 1];
+        zp = ((zpIdx & 1) == 0 ? byte & 0xF : byte >> 4).toDouble();
+      }
+      final blobBase = colBase + blk * blobBytes;
+      final kBase = blk * blockSize;
+      final kEnd = (kBase + blockSize < k ? kBase + blockSize : k);
+      for (int kk = kBase; kk < kEnd; kk++) {
+        final j = kk - kBase;
+        final byte = bBytes[blobBase + (j >> 1)];
+        final q = (j & 1) == 0 ? byte & 0xF : byte >> 4;
+        bt[kk * n + col] = (q - zp) * scale;
+      }
+    }
+  }
+
+  final af = a.asFloatList();
+  final m = a.length ~/ k;
+  final out = Float32List(m * n);
+  gemm.matmulKernel(af, 0, bt, 0, out, 0, m, k, n);
+  return Tensor.float(out, [...a.shape.sublist(0, a.rank - 1), n]);
 }
 
 /// Integer 2-D convolution accumulator shared by ConvInteger / QLinearConv:
