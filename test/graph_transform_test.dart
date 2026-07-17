@@ -17,6 +17,22 @@ TensorProto floatInit(String name, List<int> dims, List<double> v) =>
       ..dims.addAll(dims.map(Int64.new))
       ..floatData.addAll(v);
 
+/// Abramowitz-Stegun erf, independent reference for the gelu tests.
+double _erfRef(double x) {
+  final sign = x < 0 ? -1.0 : 1.0;
+  x = x.abs();
+  const p = 0.3275911;
+  final t = 1.0 / (1.0 + p * x);
+  final y = 1.0 -
+      (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t -
+                  0.284496736) *
+              t +
+          0.254829592) *
+          t *
+          math.exp(-x * x);
+  return sign * y;
+}
+
 void main() {
   test('constant chains fold at load time (no per-run dispatch)', () {
     // C1 (Constant) -> Neg -> Add with initializer K, all constant; result
@@ -90,6 +106,82 @@ void main() {
     final w = Tensor.float(Float32List.fromList([2, 10]), [2]);
     expect(model.run({'X': x, 'W': w}, ['Y'])['Y']!.asFloatList(),
         [-6.0, -50.0]);
+  });
+
+  group('pattern fusion', () {
+    GraphProto geluGraph({bool leakIntermediate = false}) {
+      final g = GraphProto()
+        ..input.add(ValueInfoProto()..name = 'X')
+        ..output.add(ValueInfoProto()..name = 'Y')
+        ..initializer.addAll([
+          floatInit('sqrt2', [], [math.sqrt2]),
+          floatInit('one', [], [1.0]),
+          floatInit('half', [], [0.5]),
+        ])
+        ..node.addAll([
+          NodeProto()
+            ..opType = 'Div'
+            ..input.addAll(['X', 'sqrt2'])
+            ..output.add('d'),
+          NodeProto()
+            ..opType = 'Erf'
+            ..input.add('d')
+            ..output.add('e'),
+          NodeProto()
+            ..opType = 'Add'
+            ..input.addAll(['e', 'one'])
+            ..output.add('a'),
+          NodeProto()
+            ..opType = 'Mul'
+            ..input.addAll(['X', 'a'])
+            ..output.add('m'),
+          NodeProto()
+            ..opType = 'Mul'
+            ..input.addAll(['m', 'half'])
+            ..output.add('Y'),
+        ]);
+      if (leakIntermediate) {
+        // The erf output is also a graph output -> fusion must not fire.
+        g.output.add(ValueInfoProto()..name = 'e');
+      }
+      return g;
+    }
+
+    double gelu(double x) {
+      // Reference value via the same erf approximation the runtime uses is
+      // not required — check against a loose analytic bound instead.
+      return 0.5 * x * (1 + _erfRef(x / math.sqrt2));
+    }
+
+    test('erf-GELU chain fuses and computes gelu', () {
+      final model = OnnxModel.fromBytes(
+          (ModelProto()..graph = geluGraph()).writeToBuffer());
+      final x = Tensor.float(
+          Float32List.fromList([-2, -0.5, 0, 0.5, 2]), [5]);
+      final profile = ExecutionProfile();
+      final y = model.run({'X': x}, ['Y'], profile: profile)['Y']!;
+      expect(profile.callsByOp.keys.toList(), ['_FusedGelu'],
+          reason: 'whole chain must fuse into one node');
+      for (int k = 0; k < 5; k++) {
+        expect(y.asFloatList()[k], closeTo(gelu(x.asFloatList()[k]), 1e-4));
+      }
+    });
+
+    test('fusion aborts when an intermediate is a graph output', () {
+      final model = OnnxModel.fromBytes(
+          (ModelProto()..graph = geluGraph(leakIntermediate: true))
+              .writeToBuffer());
+      final x = Tensor.float(Float32List.fromList([1.0, -1.0]), [2]);
+      final profile = ExecutionProfile();
+      final out = model.run({'X': x}, ['Y', 'e'], profile: profile);
+      expect(profile.callsByOp.containsKey('Erf'), isTrue,
+          reason: 'unfused chain must still run node-by-node');
+      expect(out['e']!.length, 2);
+      for (int k = 0; k < 2; k++) {
+        expect(out['Y']!.asFloatList()[k],
+            closeTo(gelu(x.asFloatList()[k]), 1e-4));
+      }
+    });
   });
 
   group('Transpose fast/general paths match a naive reference', () {

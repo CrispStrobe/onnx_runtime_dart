@@ -364,6 +364,28 @@ def main():
     emit("size_op", [helper.make_node("Size", ["x"], ["out0"])],
          {"x": f32(2, 3, 4)})
 
+    # ---- fusion patterns (we fuse these; ORT runs them literally) ----
+    emit("gelu_pattern_erf",
+         [helper.make_node("Div", ["x", "sqrt2"], ["d"]),
+          helper.make_node("Erf", ["d"], ["e"]),
+          helper.make_node("Add", ["e", "one"], ["a"]),
+          helper.make_node("Mul", ["x", "a"], ["m"]),
+          helper.make_node("Mul", ["m", "half"], ["out0"])],
+         {"x": f32(2, 5, 16)},
+         initializers={"sqrt2": np.array(np.sqrt(2), dtype=np.float32),
+                       "one": np.array(1.0, dtype=np.float32),
+                       "half": np.array(0.5, dtype=np.float32)})
+    # BERT-style attention block: scores/sqrt(d) + mask -> softmax -> context
+    emit("sdpa_pattern",
+         [helper.make_node("MatMul", ["q", "kt"], ["s0"]),
+          helper.make_node("Div", ["s0", "sqrt_d"], ["s1"]),
+          helper.make_node("Add", ["s1", "mask"], ["s2"]),
+          helper.make_node("Softmax", ["s2"], ["p"], axis=-1),
+          helper.make_node("MatMul", ["p", "v"], ["out0"])],
+         {"q": f32(2, 3, 4, 8), "kt": f32(2, 3, 8, 4), "v": f32(2, 3, 4, 8),
+          "mask": (RNG.standard_normal((2, 1, 1, 4)) * 4).astype(np.float32)},
+         initializers={"sqrt_d": np.array(np.sqrt(8.0), dtype=np.float32)})
+
     # ---- A5: QDQ quantization ----
     emit("quantizelinear_uint8",
          [helper.make_node("QuantizeLinear", ["x", "s", "z"], ["out0"])],
@@ -415,6 +437,67 @@ def main():
              "sw": np.array([0.01, 0.02, 0.015], dtype=np.float32),
              "zw": np.array([0, 0, 0], dtype=np.int8),
          })
+
+    # ---- QOperator quantized ops ----
+    u8 = lambda *s: RNG.integers(0, 256, s).astype(np.uint8)
+    i8 = lambda *s: RNG.integers(-128, 128, s).astype(np.int8)
+    emit("matmulinteger_u8i8",
+         [helper.make_node("MatMulInteger", ["a", "b", "az", "bz"], ["out0"])],
+         {},
+         initializers={"a": u8(4, 6), "b": i8(6, 5),
+                       "az": np.array(128, dtype=np.uint8),
+                       "bz": np.array(3, dtype=np.int8)})
+    emit("matmulinteger_nozp",
+         [helper.make_node("MatMulInteger", ["a", "b"], ["out0"])],
+         {}, initializers={"a": u8(3, 7), "b": u8(7, 4)})
+    emit("matmulinteger_batched",
+         [helper.make_node("MatMulInteger", ["a", "b", "az", "bz"], ["out0"])],
+         {},
+         initializers={"a": u8(2, 4, 6), "b": i8(2, 6, 5),
+                       "az": np.array(100, dtype=np.uint8),
+                       "bz": np.array(0, dtype=np.int8)})
+    emit("convinteger",
+         [helper.make_node("ConvInteger", ["x", "w", "xz", "wz"], ["out0"],
+                           pads=[1, 1, 1, 1])],
+         {},
+         initializers={"x": u8(1, 2, 5, 5), "w": i8(3, 2, 3, 3),
+                       "xz": np.array(120, dtype=np.uint8),
+                       "wz": np.array(2, dtype=np.int8)})
+    emit("qlinearmatmul",
+         [helper.make_node("QLinearMatMul",
+                           ["a", "as_", "az", "b", "bs", "bz",
+                            "ys", "yz"], ["out0"])],
+         {},
+         initializers={"a": u8(4, 6), "as_": np.array(0.02, np.float32),
+                       "az": np.array(113, dtype=np.uint8),
+                       "b": u8(6, 5), "bs": np.array(0.05, np.float32),
+                       "bz": np.array(128, dtype=np.uint8),
+                       "ys": np.array(0.1, np.float32),
+                       "yz": np.array(100, dtype=np.uint8)})
+    emit("qlinearconv_pertensor",
+         [helper.make_node("QLinearConv",
+                           ["x", "xs", "xz", "w", "ws", "wz", "ys", "yz"],
+                           ["out0"], pads=[1, 1, 1, 1])],
+         {},
+         initializers={"x": u8(1, 2, 5, 5), "xs": np.array(0.02, np.float32),
+                       "xz": np.array(128, dtype=np.uint8),
+                       "w": i8(3, 2, 3, 3), "ws": np.array(0.01, np.float32),
+                       "wz": np.array(0, dtype=np.int8),
+                       "ys": np.array(0.05, np.float32),
+                       "yz": np.array(110, dtype=np.uint8)})
+    emit("qlinearconv_perchannel_bias",
+         [helper.make_node("QLinearConv",
+                           ["x", "xs", "xz", "w", "ws", "wz", "ys", "yz",
+                            "bias"], ["out0"], strides=[2, 2])],
+         {},
+         initializers={"x": u8(1, 2, 7, 7), "xs": np.array(0.03, np.float32),
+                       "xz": np.array(90, dtype=np.uint8),
+                       "w": i8(4, 2, 3, 3),
+                       "ws": np.array([0.01, 0.02, 0.005, 0.03], np.float32),
+                       "wz": np.array([0, 1, -2, 0], dtype=np.int8),
+                       "ys": np.array(0.07, np.float32),
+                       "yz": np.array(128, dtype=np.uint8),
+                       "bias": RNG.integers(-500, 500, 4).astype(np.int32)})
 
     # ---- A4: control flow ----
     def vi(name, dt, shape):
@@ -476,6 +559,39 @@ def main():
          {"x": f32(2, 3)},
          initializers={"limit": np.array(2, dtype=np.int64),
                        "one": np.array(1, dtype=np.int64)})
+
+    # ---- Scan ----
+    # Running sum: state s [2]; scan input xs [4, 2]; per step s += x,
+    # scan output collects each intermediate sum.
+    scan_body = helper.make_graph(
+        [helper.make_node("Add", ["s_in", "x_slice"], ["s_out"]),
+         helper.make_node("Identity", ["s_out"], ["scan_out"])],
+        "scan_body",
+        [vi("s_in", TensorProto.FLOAT, [2]),
+         vi("x_slice", TensorProto.FLOAT, [2])],
+        [vi("s_out", TensorProto.FLOAT, [2]),
+         vi("scan_out", TensorProto.FLOAT, [2])])
+    emit("scan_cumsum",
+         [helper.make_node("Scan", ["s0", "xs"], ["out0", "out1"],
+                           body=scan_body, num_scan_inputs=1)],
+         {"xs": f32(4, 2)},
+         initializers={"s0": np.zeros(2, dtype=np.float32)},
+         n_outputs=2)
+    # Two scan inputs, capture of an outer initializer inside the body.
+    scan_body2 = helper.make_graph(
+        [helper.make_node("Mul", ["x_sl", "y_sl"], ["xy"]),
+         helper.make_node("Add", ["s_in", "xy"], ["s_mid"]),
+         helper.make_node("Add", ["s_mid", "k"], ["s_out"])],
+        "scan_body2",
+        [vi("s_in", TensorProto.FLOAT, [3]),
+         vi("x_sl", TensorProto.FLOAT, [3]),
+         vi("y_sl", TensorProto.FLOAT, [3])],
+        [vi("s_out", TensorProto.FLOAT, [3])])
+    emit("scan_two_inputs",
+         [helper.make_node("Scan", ["s0", "xs", "ys"], ["out0"],
+                           body=scan_body2, num_scan_inputs=2)],
+         {"xs": f32(3, 3), "ys": f32(3, 3)},
+         initializers={"s0": f32(3), "k": f32(3)})
 
     print("fixtures written to", FIXTURES)
 

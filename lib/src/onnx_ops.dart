@@ -1017,6 +1017,57 @@ Tensor opMatMul(Tensor a, Tensor b) {
   return Tensor.float(out, outShape);
 }
 
+/// Fused scaled-dot-product-attention epilogue:
+/// `MatMul(Softmax(MatMul(a, b) * scale + mask, axis: -1), v)`.
+///
+/// The scale, mask-add and row softmax happen in one pass over the attention
+/// matrix (no intermediate tensors); [mask] broadcasts against the score
+/// shape numpy-style.
+Tensor opFusedSDPA(Tensor a, Tensor b, Tensor v, Tensor mask, double scale) {
+  final s = opMatMul(a, b);
+  final sf = s.f!;
+  final t = s.shape.last;
+  final rows = s.length ~/ t;
+
+  final mf = mask.asFloatList();
+  // Per-row mask offset via broadcast; within a row the mask stride is 1
+  // (mask last dim == t) or 0 (mask last dim == 1).
+  final rowShape = s.shape.sublist(0, s.rank - 1);
+  final maskLastStride =
+      mask.shape.isNotEmpty && mask.shape.last == t ? 1 : 0;
+  final rowCoords = List<int>.filled(rowShape.length, 0);
+  // Mask shape aligned against the full score shape, minus its last axis.
+  final maskRowShape = mask.rank == 0
+      ? const <int>[]
+      : mask.shape.sublist(0, mask.rank - 1);
+
+  for (int r = 0; r < rows; r++) {
+    final base = r * t;
+    final mBase = _flattenBroadcast(rowCoords, maskRowShape) *
+        (mask.rank == 0 ? 0 : mask.shape.last);
+    double max = double.negativeInfinity;
+    for (int j = 0; j < t; j++) {
+      final val = sf[base + j] * scale + mf[mBase + j * maskLastStride];
+      sf[base + j] = val;
+      if (val > max) max = val;
+    }
+    double sum = 0;
+    for (int j = 0; j < t; j++) {
+      final e = math.exp(sf[base + j] - max);
+      sf[base + j] = e;
+      sum += e;
+    }
+    for (int j = 0; j < t; j++) {
+      sf[base + j] /= sum;
+    }
+    for (int k = rowShape.length - 1; k >= 0; k--) {
+      if (++rowCoords[k] < rowShape[k]) break;
+      rowCoords[k] = 0;
+    }
+  }
+  return opMatMul(s, v);
+}
+
 /// Gemm: Y = alpha * A' * B' + beta * C  (A'/B' optionally transposed)
 Tensor opGemm(Tensor a, Tensor b, Tensor? c,
     {double alpha = 1.0,

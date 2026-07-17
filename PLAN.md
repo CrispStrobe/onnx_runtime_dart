@@ -1,16 +1,14 @@
 # PLAN — closing the gap to ONNX Runtime
 
-> **Status (2026-07-17):** B0 ✅ B1 ✅ B2 ✅ B3 ✅ (constant folding +
-> hot-op fast paths; pattern *fusion* — GELU/attention — still open) ·
-> A1 ✅ A2 ✅ A3 ✅ (LSTM/GRU/RNN; Silero VAD verified) A4 ✅ (If/Loop;
-> Scan open) B4 ✅ (isolate pool: column-partitioned MatMul weights,
-> `parallelize`/`runAsync`, bitwise-equal to sync; Gemm/conv fan-out and
-> speedup measurement still open) A5 ✅ *QDQ format* (Q/DQ/DynamicQ ops,
-> int8/uint8 weights; quantized MobileNetV2 matches ORT's top-5 — QOperator
-> ops QLinearConv/QLinearMatMul/MatMulInteger still open). Depthwise-conv
-> fast path landed but is not yet benchmarked on a quiet machine. Numbers
-> in `BENCHMARKS.md`; per-op ORT parity fixtures in `test/fixtures/`
-> (`tool/gen_fixtures.py`), live-model parity via `tool/live_parity.py|dart`.
+> **Status (2026-07-17): all workstreams landed.** B0–B4 ✅ (incl. GELU +
+> SDPA pattern fusion; isolate pool) · A1–A5 ✅ (conv/pool, im2col,
+> LSTM/GRU/RNN, If/Loop/Scan, QDQ **and** QOperator quantization).
+> Remaining follow-ups: quiet-machine benchmarks for depthwise conv /
+> fusion / isolate pool (machine was at load-avg 70–160 when they landed —
+> parity is verified, wall-clock impact is not); Scan non-default
+> axes/directions; pool fan-out for Gemm/conv. Numbers in `BENCHMARKS.md`;
+> per-op ORT parity fixtures in `test/fixtures/` (`tool/gen_fixtures.py`),
+> live-model parity via `tool/live_parity.py|dart`.
 
 Two workstreams, independently useful and largely independent to execute:
 

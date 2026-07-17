@@ -3,11 +3,13 @@
 /// pass with a name -> Tensor value cache — no separate topo-sort needed.
 library;
 
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'onnx.pb.dart';
 import 'onnx_nn_ops.dart' as nn;
 import 'onnx_ops.dart' as ops;
+import 'onnx_qlinear_ops.dart' as ql;
 import 'onnx_rnn_ops.dart' as rnn;
 import 'onnx_proto_loader.dart';
 import 'parallel_pool_stub.dart' if (dart.library.ffi) 'parallel_pool.dart';
@@ -71,7 +73,166 @@ class OnnxGraphExecutor {
       _initializers[t.name] = tensorFromProto(t, ext: externalData);
       _initializerElemType[t.name] = t.dataType;
     }
-    _nodes = _foldConstants();
+    _nodes = _fusePatterns(_foldConstants());
+  }
+
+  /// Rewrites known multi-node patterns into single fused nodes (synthetic
+  /// op types prefixed `_Fused`), after constant folding so scalar constants
+  /// are initializers. Patterns only fuse when every intermediate value has
+  /// exactly one consumer and is not a graph output.
+  ///
+  /// - erf-GELU: `0.5 * x * (1 + Erf(x / sqrt(2)))` (5 nodes -> _FusedGelu)
+  /// - scaled-dot-product attention epilogue:
+  ///   `MatMul(Softmax(MatMul(A,B)/c + mask), V)` -> _FusedSDPA, folding the
+  ///   scale + mask + softmax into one pass over the attention matrix.
+  List<NodeProto> _fusePatterns(List<NodeProto> nodes) {
+    final uses = <String, int>{};
+    final consumers = <String, List<int>>{};
+    for (int i = 0; i < nodes.length; i++) {
+      for (final name in nodes[i].input) {
+        uses.update(name, (v) => v + 1, ifAbsent: () => 1);
+        (consumers[name] ??= []).add(i);
+      }
+    }
+    for (final o in _graph.output) {
+      uses.update(o.name, (v) => v + 1000, ifAbsent: () => 1000);
+    }
+    final producerIdx = <String, int>{};
+    for (int i = 0; i < nodes.length; i++) {
+      for (final o in nodes[i].output) {
+        producerIdx[o] = i;
+      }
+    }
+
+    double? scalarInit(String name) {
+      final t = _initializers[name];
+      return t != null && t.length == 1 ? t.getD(0) : null;
+    }
+
+    /// The single consumer of [name] if it has exactly one use, else null.
+    NodeProto? soleConsumer(String name) {
+      if (uses[name] != 1) return null;
+      final c = consumers[name];
+      return c == null || c.isEmpty ? null : nodes[c.first];
+    }
+
+    NodeProto? producerOf(String name, String opType) {
+      final i = producerIdx[name];
+      return i != null && nodes[i].opType == opType ? nodes[i] : null;
+    }
+
+    final removed = <NodeProto>{};
+    final replaceAt = <NodeProto, NodeProto>{}; // pattern tail -> fused node
+
+    for (final erf in nodes) {
+      if (erf.opType != 'Erf') continue;
+      // x / sqrt(2)  (also matches x * (1/sqrt(2)))
+      final div = producerOf(erf.input[0], 'Div');
+      final mulIn = div == null ? producerOf(erf.input[0], 'Mul') : null;
+      final pre = div ?? mulIn;
+      if (pre == null || uses[erf.input[0]] != 1) continue;
+      final c = scalarInit(pre.input[1]);
+      final okScale = c != null &&
+          (div != null
+              ? (c - math.sqrt2).abs() < 1e-4
+              : (c - 1 / math.sqrt2).abs() < 1e-4);
+      if (!okScale) continue;
+      final x = pre.input[0];
+      // (1 + erf)
+      final add = soleConsumer(erf.output[0]);
+      if (add == null || add.opType != 'Add') continue;
+      final one = scalarInit(add.input[0] == erf.output[0]
+          ? add.input[1]
+          : add.input[0]);
+      if (one == null || (one - 1).abs() > 1e-6) continue;
+      // * x, then * 0.5 (either order)
+      final mul1 = soleConsumer(add.output[0]);
+      if (mul1 == null || mul1.opType != 'Mul') continue;
+      final mul1Other =
+          mul1.input[0] == add.output[0] ? mul1.input[1] : mul1.input[0];
+      final mul2 = soleConsumer(mul1.output[0]);
+      if (mul2 == null || mul2.opType != 'Mul') continue;
+      final mul2Other =
+          mul2.input[0] == mul1.output[0] ? mul2.input[1] : mul2.input[0];
+      final bool xThenHalf =
+          mul1Other == x && (scalarInit(mul2Other) ?? 0) == 0.5;
+      final bool halfThenX =
+          (scalarInit(mul1Other) ?? 0) == 0.5 && mul2Other == x;
+      if (!xThenHalf && !halfThenX) continue;
+
+      removed.addAll([pre, erf, add, mul1]);
+      replaceAt[mul2] = NodeProto()
+        ..opType = '_FusedGelu'
+        ..name = 'fused_gelu_${mul2.output[0]}'
+        ..input.add(x)
+        ..output.add(mul2.output[0]);
+    }
+
+    for (final sm in nodes) {
+      if (sm.opType != 'Softmax') continue;
+      final axis = _AttrMap(sm.attribute).getInt('axis') ?? -1;
+      if (axis != -1) continue; // row softmax only (mask/scale fold per row)
+      // scores + mask. The scores operand is either MatMul directly (exports
+      // that pre-scale Q/K) or MatMul followed by a scalar Div/Mul.
+      final add = producerOf(sm.input[0], 'Add');
+      if (add == null || uses[sm.input[0]] != 1) continue;
+      NodeProto? scale;
+      NodeProto? mm1;
+      String? mask;
+      for (final cand in [add.input[0], add.input[1]]) {
+        if (uses[cand] != 1) continue;
+        final direct = producerOf(cand, 'MatMul');
+        if (direct != null) {
+          mm1 = direct;
+          mask = add.input[0] == cand ? add.input[1] : add.input[0];
+          break;
+        }
+        final p = producerOf(cand, 'Div') ?? producerOf(cand, 'Mul');
+        if (p != null &&
+            scalarInit(p.input[1]) != null &&
+            uses[p.input[0]] == 1) {
+          final mm = producerOf(p.input[0], 'MatMul');
+          if (mm != null) {
+            scale = p;
+            mm1 = mm;
+            mask = add.input[0] == cand ? add.input[1] : add.input[0];
+            break;
+          }
+        }
+      }
+      if (mm1 == null) continue;
+      final mm2 = soleConsumer(sm.output[0]);
+      if (mm2 == null ||
+          mm2.opType != 'MatMul' ||
+          mm2.input[0] != sm.output[0]) {
+        continue;
+      }
+      final double scaleVal;
+      if (scale == null) {
+        scaleVal = 1.0;
+      } else {
+        final c = scalarInit(scale.input[1])!;
+        scaleVal = scale.opType == 'Div' ? 1.0 / c : c;
+      }
+
+      removed.addAll([mm1, if (scale != null) scale, add, sm]);
+      replaceAt[mm2] = NodeProto()
+        ..opType = '_FusedSDPA'
+        ..name = 'fused_sdpa_${mm2.output[0]}'
+        ..input.addAll([mm1.input[0], mm1.input[1], mm2.input[1], mask!])
+        ..output.add(mm2.output[0])
+        ..attribute.add(AttributeProto()
+          ..name = 'scale'
+          ..f = scaleVal);
+    }
+
+    return [
+      for (final n in nodes)
+        if (replaceAt.containsKey(n))
+          replaceAt[n]!
+        else if (!removed.contains(n))
+          n
+    ];
   }
 
   /// Executes every node whose inputs are all compile-time constants once,
@@ -196,6 +357,8 @@ class OnnxGraphExecutor {
                   attrs.getGraph(branch)!, values, const [], profile);
             case 'Loop':
               outs = _runLoop(node, ins, attrs, values, profile);
+            case 'Scan':
+              outs = _runScan(node, ins, attrs, values, profile);
             default:
               outs = _dispatch(node, ins, attrs);
           }
@@ -238,6 +401,8 @@ class OnnxGraphExecutor {
                 profile);
           case 'Loop':
             outs = _runLoop(node, ins, attrs, values, profile);
+          case 'Scan':
+            outs = _runScan(node, ins, attrs, values, profile);
           default:
             outs = _dispatch(node, ins, attrs);
         }
@@ -273,6 +438,56 @@ class OnnxGraphExecutor {
     }
     _execNodes(g.node, values, profile);
     return [for (final o in g.output) values[o.name]!];
+  }
+
+  /// `Scan` — inputs `[state_1..state_M, scan_1..scan_N]`; body graph maps
+  /// `[states, scan slices] -> [states, scan output slices]`. Scan inputs
+  /// are sliced along axis 0, scan outputs stacked along a new axis 0
+  /// (only the default axes/directions are supported).
+  List<Tensor> _runScan(NodeProto node, List<Tensor?> ins, _AttrMap attrs,
+      Map<String, Tensor> values, ExecutionProfile? profile) {
+    final body = attrs.getGraph('body')!;
+    final nScan = attrs.getInt('num_scan_inputs')!;
+    for (final attr in [
+      'scan_input_axes',
+      'scan_input_directions',
+      'scan_output_axes',
+      'scan_output_directions'
+    ]) {
+      final v = attrs.getInts(attr);
+      if (v != null && v.any((x) => x != 0)) {
+        throw UnsupportedError(
+            'Scan: only default $attr (all zero) supported, got $v');
+      }
+    }
+    final nState = node.input.length - nScan;
+    var states = [for (int k = 0; k < nState; k++) ins[k]!];
+    final scanIns = [for (int k = nState; k < ins.length; k++) ins[k]!];
+    final iters = scanIns.isEmpty ? 0 : scanIns.first.shape[0];
+    final nScanOut = body.output.length - nState;
+    final scans = List.generate(nScanOut, (_) => <Tensor>[]);
+
+    Tensor sliceRow(Tensor t, int i) {
+      final rowLen = t.length ~/ t.shape[0];
+      final shape = t.shape.sublist(1);
+      return t.isFloat
+          ? Tensor.float(
+              Float32List.sublistView(t.f!, i * rowLen, (i + 1) * rowLen),
+              shape)
+          : Tensor.int64(
+              Int64List.sublistView(t.i!, i * rowLen, (i + 1) * rowLen),
+              shape);
+    }
+
+    for (int i = 0; i < iters; i++) {
+      final outs = _execSubgraph(body, values,
+          [...states, for (final t in scanIns) sliceRow(t, i)], profile);
+      states = outs.sublist(0, nState);
+      for (int k = 0; k < nScanOut; k++) {
+        scans[k].add(outs[nState + k]);
+      }
+    }
+    return [...states, for (final steps in scans) _stack(steps)];
   }
 
   /// `Loop` — inputs `[M?, cond?, v_1..v_N]`; body graph inputs
@@ -336,6 +551,14 @@ class OnnxGraphExecutor {
     switch (node.opType) {
       case 'Identity':
         return [need(0)];
+      // --- synthetic fused ops (created by _fusePatterns, never in files) ---
+      case '_FusedGelu':
+        return [ops.opGelu(need(0))];
+      case '_FusedSDPA':
+        return [
+          ops.opFusedSDPA(need(0), need(1), need(2), need(3),
+              attrs.getFloat('scale')!)
+        ];
       case 'Add':
         return [ops.opAdd(need(0), need(1))];
       case 'Sub':
@@ -649,6 +872,40 @@ class OnnxGraphExecutor {
         ];
       case 'DynamicQuantizeLinear':
         return ops.opDynamicQuantizeLinear(need(0));
+      case 'MatMulInteger':
+        return [
+          ql.opMatMulInteger(need(0), need(1),
+              ins.length > 2 ? ins[2] : null, ins.length > 3 ? ins[3] : null)
+        ];
+      case 'ConvInteger':
+        return [
+          ql.opConvInteger(need(0), need(1), ins.length > 2 ? ins[2] : null,
+              ins.length > 3 ? ins[3] : null,
+              strides: attrs.getInts('strides'),
+              pads: attrs.getInts('pads'),
+              dilations: attrs.getInts('dilations'),
+              group: attrs.getInt('group') ?? 1)
+        ];
+      case 'QLinearMatMul':
+        final qmInt8 = _initializerElemType[node.input[7]] == 3;
+        return [
+          ql.opQLinearMatMul(need(0), need(1), ins[2], need(3), need(4),
+              ins[5], need(6), ins.length > 7 ? ins[7] : null,
+              lo: qmInt8 ? -128 : 0, hi: qmInt8 ? 127 : 255)
+        ];
+      case 'QLinearConv':
+        final qcInt8 = _initializerElemType[node.input[7]] == 3;
+        return [
+          ql.opQLinearConv(need(0), need(1), ins[2], need(3), need(4),
+              ins[5], need(6), ins.length > 7 ? ins[7] : null,
+              ins.length > 8 ? ins[8] : null,
+              strides: attrs.getInts('strides'),
+              pads: attrs.getInts('pads'),
+              dilations: attrs.getInts('dilations'),
+              group: attrs.getInt('group') ?? 1,
+              lo: qcInt8 ? -128 : 0,
+              hi: qcInt8 ? 127 : 255)
+        ];
       case 'Pad':
         // Opset 11+ takes pads/value/axes as inputs; opset 2 as attributes.
         final padsList = ins.length > 1 && ins[1] != null

@@ -7,10 +7,10 @@ runs on **every Dart/Flutter target, including the web and WebAssembly**.
 It implements the operator set used by **transformer / attention** style models
 (BERT-family text embedders, rerankers, and RoPE / ALiBi variants), the
 **convolution / pooling** family used by CNN vision models, **recurrent** ops
-(`LSTM`/`GRU`/`RNN`) and **control flow** (`If`/`Loop` with subgraph
-execution). It is still not a complete ONNX runtime — notably `Scan`,
-`Einsum` beyond two known patterns, and QOperator-format quantized ops are
-missing (QDQ-format quantized models are supported).
+(`LSTM`/`GRU`/`RNN`), **control flow** (`If`/`Loop`/`Scan` with subgraph
+execution) and **quantized models** (both QDQ and QOperator formats). It is
+still not a complete ONNX runtime — see the operator list below for exactly
+what is covered.
 
 Verified to **cosine-1.0 parity** against ONNX Runtime (via `ort`), max abs diff
 ~1e-6 (float32 rounding), on: `jina-embeddings-v2-base-en` (BERT + ALiBi),
@@ -100,14 +100,21 @@ self-contained, runnable graph built with the protobuf types.
 - **Recurrent:** `LSTM` (incl. peepholes), `GRU` (incl. linear_before_reset),
   `RNN` — forward / reverse / bidirectional, `sequence_lens`,
   `initial_h`/`initial_c`; default activations only.
-- **Control flow / misc:** `If`, `Loop` (subgraphs capture the outer scope;
-  scan outputs supported), `Identity`, `Pad` (constant / reflect / edge),
-  `Size`.
-- **Quantization (QDQ format):** `QuantizeLinear`, `DequantizeLinear`
-  (per-tensor + per-axis, uint8/int8), `DynamicQuantizeLinear`; int8/uint8
-  weights load and dequantize (weight `DequantizeLinear` nodes constant-fold
-  at load, so QDQ models run at float speed). QOperator-format ops
-  (`QLinearConv`, `QLinearMatMul`, `MatMulInteger`) are not implemented.
+- **Control flow / misc:** `If`, `Loop`, `Scan` (subgraphs capture the outer
+  scope; scan outputs supported; Scan with default axes/directions),
+  `Identity`, `Pad` (constant / reflect / edge), `Size`.
+- **Quantization:** QDQ format — `QuantizeLinear`, `DequantizeLinear`
+  (per-tensor + per-axis, uint8/int8), `DynamicQuantizeLinear`; weight
+  `DequantizeLinear` nodes constant-fold at load, so QDQ models run at float
+  speed. QOperator format — `MatMulInteger`, `ConvInteger`, `QLinearMatMul`,
+  `QLinearConv` (per-channel weight scales + int32 bias) with exact int32
+  accumulation and round-half-to-even requantization.
+- **Fusion (load-time, automatic):** the erf-GELU chain
+  (`0.5·x·(1+Erf(x/√2))`) fuses to a single pass, and the attention epilogue
+  `MatMul(Softmax(MatMul(Q,K)·s + mask), V)` fuses so scale + mask + softmax
+  happen in one sweep over the attention matrix. Fusions only fire when the
+  intermediate values have no other consumers; results stay within float
+  rounding of the unfused graph.
 
 Tensors are float32 or int64 (int32 and bool are widened to int64), row-major
 (matching ONNX's own layout). An unimplemented op throws `UnsupportedError`
