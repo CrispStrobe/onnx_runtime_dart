@@ -88,12 +88,20 @@ class Tensor {
   int getI(int flatIdx) =>
       isFloat ? _floatToInt(f![flatIdx]) : intData[flatIdx];
 
+  // int64 saturation bounds. Written as parsed values, not literals, so this
+  // compiles under dart2js — on the web `int` is a 53-bit double and a 64-bit
+  // literal (0x7FFFFFFFFFFFFFFF) is a compile error. Exact on the VM; the
+  // nearest double on the web, which only matters when saturating a non-finite
+  // Cast, so the web's imprecision there is harmless.
+  static final int _int64Max = int.parse('9223372036854775807');
+  static final int _int64Min = int.parse('-9223372036854775808');
+
   /// Float -> int with saturation for non-finite values (matching ORT's
   /// ARM Cast semantics: +-inf saturate, NaN -> 0) — Dart's toInt() throws.
   static int _floatToInt(double v) {
     if (v.isNaN) return 0;
     if (v.isInfinite) {
-      return v > 0 ? 0x7FFFFFFFFFFFFFFF : -0x8000000000000000;
+      return v > 0 ? _int64Max : _int64Min;
     }
     return v.toInt();
   }

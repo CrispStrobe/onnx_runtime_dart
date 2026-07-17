@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.5
+
+- **Web build fix:** the float→int Cast saturation added in 0.3.4 used 64-bit
+  integer literals (`0x7FFFFFFFFFFFFFFF` / `-0x8000000000000000`), which are a
+  compile error under dart2js (on the web `int` is a 53-bit double). The bounds
+  are now parsed at runtime — exact on the VM, the nearest double on the web
+  (only used when saturating a non-finite Cast, so harmless). Restores web
+  (dart2js) compilation.
+
 ## 0.3.4
 
 - **Correctness:** `Tensor.reshape` resolved `-1` before substituting
