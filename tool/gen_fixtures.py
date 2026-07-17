@@ -364,6 +364,26 @@ def main():
     emit("size_op", [helper.make_node("Size", ["x"], ["out0"])],
          {"x": f32(2, 3, 4)})
 
+    emit("reducemax_axes",
+         [helper.make_node("ReduceMax", ["x"], ["out0"], axes=[1],
+                           keepdims=1)],
+         {"x": f32(2, 5, 3)}, opset=17)
+    emit("reducemax_all_nokeep",
+         [helper.make_node("ReduceMax", ["x"], ["out0"], keepdims=0)],
+         {"x": f32(2, 5, 3)}, opset=17)
+    emit("slice_attr_form",  # opset-9 Slice: starts/ends/axes as attributes
+         [helper.make_node("Slice", ["x"], ["out0"], starts=[1, 0],
+                           ends=[3, 2], axes=[0, 2])],
+         {"x": f32(4, 3, 5)}, opset=9)
+    emit("reduceprod_axes",
+         [helper.make_node("ReduceProd", ["x"], ["out0"], axes=[0],
+                           keepdims=1)],
+         {"x": (f32(3, 4) * 0.5 + 1.0)}, opset=17)
+    emit("reducemin_lastaxis",
+         [helper.make_node("ReduceMin", ["x"], ["out0"], axes=[-1],
+                           keepdims=1)],
+         {"x": f32(4, 6)}, opset=17)
+
     # ---- fusion patterns (we fuse these; ORT runs them literally) ----
     emit("gelu_pattern_erf",
          [helper.make_node("Div", ["x", "sqrt2"], ["d"]),

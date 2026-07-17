@@ -905,6 +905,102 @@ Tensor opReduceMean(Tensor x, List<int>? axes, bool keepdims) {
   return Tensor.float(out, squeezedShape);
 }
 
+/// `ReduceProd` — product over the given axes.
+Tensor opReduceProd(Tensor x, List<int>? axes, bool keepdims) {
+  final rank = x.shape.length;
+  final ax = (axes ?? List<int>.generate(rank, (k) => k))
+      .map((a) => a < 0 ? a + rank : a)
+      .toSet();
+  final outShapeFull = [
+    for (int k = 0; k < rank; k++) ax.contains(k) ? 1 : x.shape[k]
+  ];
+  final n = outShapeFull.fold<int>(1, (a, b) => a * b);
+  final prods = Float64List(n)..fillRange(0, n, 1);
+  final outStridesFull = Tensor.filledFloat(outShapeFull, 0).strides;
+  final coords = List<int>.filled(rank, 0);
+  for (int idx = 0; idx < x.length; idx++) {
+    int outFlat = 0;
+    for (int k = 0; k < rank; k++) {
+      if (!ax.contains(k)) outFlat += coords[k] * outStridesFull[k];
+    }
+    prods[outFlat] *= x.getD(idx);
+    for (int k = rank - 1; k >= 0; k--) {
+      if (++coords[k] < x.shape[k]) break;
+      coords[k] = 0;
+    }
+  }
+  final shape = keepdims
+      ? outShapeFull
+      : [
+          for (int k = 0; k < rank; k++)
+            if (!ax.contains(k)) x.shape[k]
+        ];
+  if (x.isFloat) {
+    final out = Float32List(n);
+    for (int k = 0; k < n; k++) {
+      out[k] = prods[k];
+    }
+    return Tensor.float(out, shape);
+  }
+  final out = Int64List(n);
+  for (int k = 0; k < n; k++) {
+    out[k] = prods[k].toInt();
+  }
+  return Tensor.int64(out, shape);
+}
+
+/// `ReduceMax` / `ReduceMin` (dtype-preserving, unlike the mean/sum
+/// reductions which are float by definition).
+Tensor opReduceMinMax(Tensor x, List<int>? axes, bool keepdims,
+    {required bool isMax}) {
+  final rank = x.shape.length;
+  final ax = (axes == null || axes.isEmpty
+          ? List<int>.generate(rank, (k) => k)
+          : axes)
+      .map((a) => a < 0 ? a + rank : a)
+      .toSet();
+  final outShapeFull = [
+    for (int k = 0; k < rank; k++) ax.contains(k) ? 1 : x.shape[k]
+  ];
+  final n = outShapeFull.fold<int>(1, (a, b) => a * b);
+  final outStridesFull = Tensor.filledFloat(outShapeFull, 0).strides;
+  final best = Float64List(n)
+    ..fillRange(0, n, isMax ? double.negativeInfinity : double.infinity);
+
+  final coords = List<int>.filled(rank, 0);
+  final total = x.length;
+  for (int idx = 0; idx < total; idx++) {
+    int outFlat = 0;
+    for (int k = 0; k < rank; k++) {
+      if (!ax.contains(k)) outFlat += coords[k] * outStridesFull[k];
+    }
+    final v = x.getD(idx);
+    if (isMax ? v > best[outFlat] : v < best[outFlat]) best[outFlat] = v;
+    for (int k = rank - 1; k >= 0; k--) {
+      if (++coords[k] < x.shape[k]) break;
+      coords[k] = 0;
+    }
+  }
+  final shape = keepdims
+      ? outShapeFull
+      : [
+          for (int k = 0; k < rank; k++)
+            if (!ax.contains(k)) x.shape[k]
+        ];
+  if (x.isFloat) {
+    final out = Float32List(n);
+    for (int k = 0; k < n; k++) {
+      out[k] = best[k];
+    }
+    return Tensor.float(out, shape);
+  }
+  final out = Int64List(n);
+  for (int k = 0; k < n; k++) {
+    out[k] = best[k].toInt();
+  }
+  return Tensor.int64(out, shape);
+}
+
 Tensor opSoftmax(Tensor x, int axis) {
   final rank = x.shape.length;
   final ax = axis < 0 ? axis + rank : axis;

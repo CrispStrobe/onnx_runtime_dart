@@ -17,7 +17,11 @@ Verified to **cosine-1.0 parity** against ONNX Runtime (via `ort`), max abs diff
 `bge-small-en-v1.5`, `all-MiniLM-L6-v2`, `ms-marco-MiniLM` (cross-encoder
 reranker), the `nllb-200-600M` encoder (seq2seq / mBART), a 0.6B **RoPE**
 embedder (external-data weights), the vision CNNs **MobileNetV2** and
-**ResNet18**, and **Silero VAD** (Conv1D + LSTM + `If` + reflect-`Pad`).
+**ResNet18**, **Silero VAD** (Conv1D + LSTM + `If` + reflect-`Pad`),
+**AECMOS** (both echo-MOS models: Conv + MaxPool + bidirectional GRU +
+ReduceMax), **CAM++** (speaker-embedding x-vector: 225 convs +
+BatchNorm/AveragePool/Pad/ReduceProd), and **Maia3-5M** (chess transformer,
+policy + WDL value heads, Einsum attention).
 Every op is additionally covered by generated per-op parity fixtures against
 native ONNX Runtime (`test/fixtures/`, see `tool/gen_fixtures.py`).
 
@@ -88,8 +92,9 @@ self-contained, runnable graph built with the protobuf types.
 - **Shape / index:** `Shape`, `Reshape`, `Transpose`, `Squeeze`, `Unsqueeze`,
   `Concat`, `Gather`, `GatherND`, `GatherElements`, `Expand`, `Slice`, `Range`,
   `Cast`, `Constant`, `ConstantOfShape`.
-- **Reduce / linalg:** `ReduceMean`, `ReduceSum`, `CumSum`, `Softmax`,
-  `LayerNormalization`, `MatMul`, `Gemm`, `Einsum`.
+- **Reduce / linalg:** `ReduceMean`, `ReduceSum`, `ReduceMax`, `ReduceMin`,
+  `ReduceProd`, `CumSum`, `Softmax`, `LayerNormalization`, `MatMul`, `Gemm`,
+  `Einsum` (`bhi,oi->bho`, `bid,bjd->bij`).
 - **Convolution / pooling:** `Conv` (1–3 spatial dims, strides / pads /
   dilations / groups / depthwise / auto_pad, im2col+GEMM fast path),
   `ConvTranspose`, `MaxPool`, `AveragePool`, `GlobalAveragePool`,

@@ -27,15 +27,29 @@ def main():
 
     feed = {}
     for inp in sess.get_inputs():
-        # Dynamic dims: batch-like (leading / interior) -> 1, trailing -> seq.
+        # Dynamic dims: batch-like -> 1; time/sequence-like (by name, or the
+        # trailing axis) -> seq.
         nd = len(inp.shape)
-        dims = [d if isinstance(d, int) and d > 0 else
-                (seq if i == nd - 1 and i > 0 else 1)
-                for i, d in enumerate(inp.shape)]
+        def resolve(i, d):
+            if isinstance(d, int) and d > 0:
+                return d
+            if isinstance(d, str) and any(
+                    t in d.lower() for t in ("frame", "seq", "time", "len")):
+                return seq
+            return seq if i == nd - 1 and i > 0 else 1
+        dims = [resolve(i, d) for i, d in enumerate(inp.shape)]
         if inp.name == "sr":  # sample-rate scalar (VAD-style audio models)
             feed[inp.name] = np.array(16000, dtype=np.int64)
-        elif "state" in inp.name or "hidden" in inp.name:
+        elif ("state" in inp.name or "hidden" in inp.name
+              or inp.name in ("h0", "c0")):
             feed[inp.name] = np.zeros(dims, np.float32)
+        elif "elo" in inp.name.lower():  # rating conditioning (maia-style)
+            it = np.int32 if inp.type == "tensor(int32)" else np.int64
+            feed[inp.name] = np.full(dims, 1500, dtype=it)
+        elif inp.type == "tensor(int32)":
+            n = int(np.prod(dims))
+            feed[inp.name] = ((np.arange(n) * 37) % 97).reshape(dims).astype(
+                np.int32)
         elif inp.type == "tensor(int64)":
             n = int(np.prod(dims))
             if "mask" in inp.name:

@@ -622,6 +622,14 @@ class OnnxGraphExecutor {
       case 'Expand':
         return [ops.opExpand(need(0), need(1))];
       case 'Slice':
+        // Opset 10+ takes starts/ends/axes/steps as inputs; opset 1-9 as
+        // attributes (no steps).
+        if (ins.length == 1) {
+          return [
+            ops.opSlice(need(0), attrs.getInts('starts')!,
+                attrs.getInts('ends')!, attrs.getInts('axes'), null)
+          ];
+        }
         return [
           ops.opSlice(
             need(0),
@@ -732,6 +740,28 @@ class OnnxGraphExecutor {
                 ? ins[1]!.asIntList()
                 : attrs.getInts('axes'),
             (attrs.getInt('keepdims') ?? 1) != 0,
+          )
+        ];
+      case 'ReduceProd':
+        return [
+          ops.opReduceProd(
+            need(0),
+            ins.length > 1 && ins[1] != null
+                ? ins[1]!.asIntList()
+                : attrs.getInts('axes'),
+            (attrs.getInt('keepdims') ?? 1) != 0,
+          )
+        ];
+      case 'ReduceMax':
+      case 'ReduceMin':
+        return [
+          ops.opReduceMinMax(
+            need(0),
+            ins.length > 1 && ins[1] != null
+                ? ins[1]!.asIntList()
+                : attrs.getInts('axes'),
+            (attrs.getInt('keepdims') ?? 1) != 0,
+            isMax: node.opType == 'ReduceMax',
           )
         ];
       case 'CumSum':
