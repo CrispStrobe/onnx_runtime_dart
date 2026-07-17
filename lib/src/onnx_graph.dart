@@ -73,9 +73,17 @@ class OnnxGraphExecutor {
   /// attributes (e.g. large `Constant` values) rather than initializers.
   final ExternalDataResolver? _ext;
 
+  /// Default-domain opset version of the loaded model (some op defaults are
+  /// opset-sensitive, e.g. RoiAlign's coordinate transform).
+  late final int _opset;
+
   OnnxGraphExecutor(ModelProto model, {ExternalDataResolver? externalData})
       : _graph = model.graph,
         _ext = externalData {
+    _opset = model.opsetImport
+        .where((o) => o.domain.isEmpty)
+        .map((o) => o.version.toInt())
+        .fold(0, math.max);
     for (final t in _graph.initializer) {
       _initializers[t.name] = tensorFromProto(t, ext: externalData);
       _initializerElemType[t.name] = t.dataType;
@@ -103,6 +111,32 @@ class OnnxGraphExecutor {
     }
     for (final o in _graph.output) {
       uses.update(o.name, (v) => v + 1000, ifAbsent: () => 1000);
+    }
+    // Names captured by Loop/If/Scan body subgraphs are consumers the
+    // top-level scan above cannot see — protect them like graph outputs.
+    void protectSubgraphCaptures(GraphProto g) {
+      for (final n in g.node) {
+        for (final i in n.input) {
+          if (i.isNotEmpty) {
+            uses.update(i, (v) => v + 1000, ifAbsent: () => 1000);
+          }
+        }
+        for (final a in n.attribute) {
+          if (a.hasG()) protectSubgraphCaptures(a.g);
+          for (final sg in a.graphs) {
+            protectSubgraphCaptures(sg);
+          }
+        }
+      }
+    }
+
+    for (final n in nodes) {
+      for (final a in n.attribute) {
+        if (a.hasG()) protectSubgraphCaptures(a.g);
+        for (final sg in a.graphs) {
+          protectSubgraphCaptures(sg);
+        }
+      }
     }
     final producerIdx = <String, int>{};
     for (int i = 0; i < nodes.length; i++) {
@@ -1102,8 +1136,10 @@ class OnnxGraphExecutor {
               spatialScale: attrs.getFloat('spatial_scale') ?? 1.0,
               samplingRatio: attrs.getInt('sampling_ratio') ?? 0,
               isMax: attrs.getString('mode') == 'max',
+              // Opset < 16 has no such attribute and behaves as
+              // output_half_pixel (no -0.5 shift).
               halfPixel: (attrs.getString('coordinate_transformation_mode') ??
-                      'half_pixel') ==
+                      (_opset >= 16 ? 'half_pixel' : 'output_half_pixel')) ==
                   'half_pixel')
         ];
       case 'ArgMax':

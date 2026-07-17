@@ -1257,6 +1257,12 @@ Tensor opRMSNorm(Tensor x, Tensor gamma, int axis, double eps) {
   final ax = axis < 0 ? axis + x.rank : axis;
   final xf = x.f!;
   final gf = gamma.asFloatList();
+  // The original chain's rank-1 Mul(gamma) broadcasts along the LAST axis
+  // regardless of the reduce axis — enforce the shapes that makes valid.
+  if (gf.length != x.shape[x.rank - 1]) {
+    throw ArgumentError('RMSNorm gamma length ${gf.length} != last dim '
+        '${x.shape[x.rank - 1]}');
+  }
   final out = Float32List(xf.length);
   if (ax == x.rank - 1) {
     final d = x.shape[ax];
@@ -1284,6 +1290,7 @@ Tensor opRMSNorm(Tensor x, Tensor gamma, int axis, double eps) {
   for (int a = ax + 1; a < x.rank; a++) {
     inner *= x.shape[a];
   }
+  final lastDim = x.shape[x.rank - 1];
   for (int o = 0; o < outer; o++) {
     for (int i = 0; i < inner; i++) {
       final base = o * dim * inner + i;
@@ -1294,7 +1301,8 @@ Tensor opRMSNorm(Tensor x, Tensor gamma, int axis, double eps) {
       }
       final inv = 1.0 / math.sqrt(ss / dim + eps);
       for (int j = 0; j < dim; j++) {
-        out[base + j * inner] = xf[base + j * inner] * inv * gf[j];
+        final idx = base + j * inner;
+        out[idx] = xf[idx] * inv * gf[idx % lastDim];
       }
     }
   }
@@ -1424,6 +1432,10 @@ Tensor opEinsum(String equation, List<Tensor> inputs) {
           for (final l in (counts.keys.toList()..sort()))
             if (counts[l] == 1) l
         ].join());
+  if (outTerm.split('').toSet().length != outTerm.length) {
+    throw UnsupportedError(
+        'Einsum: repeated output labels not supported ("$equation")');
+  }
   final sumLabels = [
     for (final l in sizeOf.keys)
       if (!outTerm.contains(l)) l
@@ -1475,6 +1487,11 @@ Tensor opEinsum(String equation, List<Tensor> inputs) {
       if (++coords[p] < outShape[p]) break;
       coords[p] = 0;
     }
+  }
+  // Output dtype follows the inputs (integer einsum stays integer).
+  if (inputs.every((t) => !t.isFloat)) {
+    return Tensor.int64(
+        Int64List.fromList([for (final v in out) v.round()]), outShape);
   }
   return Tensor.float(out, outShape);
 }
@@ -1670,6 +1687,10 @@ Tensor opArgMinMax(Tensor x, int axis, bool keepdims,
       final base = o * dim * inner + i;
       int bestIdx = 0;
       double best = x.getD(base);
+      // NaN handling matches ORT's CPU kernel (pinned by the argmax_nan
+      // fixture): plain comparisons, so a NaN never wins unless it is the
+      // initial element — numpy/the ONNX reference differ here, ORT is the
+      // oracle.
       for (int d = 1; d < dim; d++) {
         final v = x.getD(base + d * inner);
         final better = isMax

@@ -27,8 +27,19 @@ RNG = np.random.default_rng(42)
 
 def tensor_json(a: np.ndarray) -> dict:
     if a.dtype in (np.float32, np.float64):
+        # Non-finite floats are not valid JSON — encode as strings, which the
+        # Dart loader converts back.
+        def enc(v):
+            v = float(v)
+            if v != v:
+                return "NaN"
+            if v == float("inf"):
+                return "Infinity"
+            if v == float("-inf"):
+                return "-Infinity"
+            return v
         return {"dtype": "float32", "shape": list(a.shape),
-                "data": [float(v) for v in a.astype(np.float32).ravel()]}
+                "data": [enc(v) for v in a.astype(np.float32).ravel()]}
     return {"dtype": "int64", "shape": list(a.shape),
             "data": [int(v) for v in a.astype(np.int64).ravel()]}
 
@@ -339,6 +350,30 @@ def main():
                            spatial_scale=0.5)],
          {"x": f32(1, 2, 8, 8)},
          initializers={"r": rois * 2, "bi": np.array([0, 0], dtype=np.int64)},
+         opset=17)
+    x_nan = f32(2, 6)
+    x_nan[0, 2] = np.nan
+    x_nan[1, 0] = np.nan
+    emit("argmax_nan",  # ORT returns the first NaN's index (NaN is the max)
+         [helper.make_node("ArgMax", ["x"], ["out0"], axis=-1)],
+         {"x": x_nan}, opset=17)
+    # (opset-18 per-group GroupNormalization is deprecated — the checker
+    # refuses to build it, so the runtime's per-group branch has no oracle
+    # fixture; it is guarded by an explicit length check instead.)
+    # grid values that unnormalize to exact .5 coordinates (rounding ties)
+    tie = np.zeros((1, 1, 4, 2), dtype=np.float32)
+    tie[0, 0, :, 0] = [2 * 2.5 / 4 - 1, 2 * 1.5 / 4 - 1, 0.0, 1.0]
+    tie[0, 0, :, 1] = [0.0, 2 * 0.5 / 4 - 1, 2 * 3.5 / 4 - 1, -1.0]
+    emit("gridsample_nearest_tie",
+         [helper.make_node("GridSample", ["x", "g"], ["out0"],
+                           mode="nearest", align_corners=1)],
+         {"x": f32(1, 1, 5, 5)}, initializers={"g": tie}, opset=20)
+    emit("einsum_int64",
+         [helper.make_node("Einsum", ["a", "b"], ["out0"],
+                           equation="ij,jk->ik")],
+         {},
+         initializers={"a": RNG.integers(-9, 9, (3, 4)).astype(np.int64),
+                       "b": RNG.integers(-9, 9, (4, 2)).astype(np.int64)},
          opset=17)
     emit("clip_attr_form",  # opset-6 Clip: min/max as attributes (Relu6)
          [helper.make_node("Clip", ["x"], ["out0"], min=0.0, max=6.0)],

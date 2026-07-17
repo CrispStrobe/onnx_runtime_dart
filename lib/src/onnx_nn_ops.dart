@@ -68,6 +68,16 @@ import 'tensor.dart';
 
 int _prod(List<int> v) => v.fold(1, (a, b) => a * b);
 
+/// Round half to even (ORT's nearbyint semantics for GridSample nearest).
+int _roundEvenNn(double v) {
+  final f = v.floorToDouble();
+  final frac = v - f;
+  if (frac > 0.5) return f.toInt() + 1;
+  if (frac < 0.5) return f.toInt();
+  final i = f.toInt();
+  return i.isEven ? i : i + 1;
+}
+
 /// Output spatial dims for a Conv with these parameters (used by the
 /// executor to plan the isolate-pool band split without running the conv).
 List<int> convOutputSpatial(List<int> inSp, List<int> kernel,
@@ -649,6 +659,12 @@ Tensor opGroupNormalization(
   final cPerGroup = c ~/ numGroups;
   final groupLen = cPerGroup * spN;
   final sf = scale.asFloatList(), bf = bias.asFloatList();
+  // Opset 18-20 defines scale/bias per GROUP; opset 21+ per channel.
+  final perGroupAffine = sf.length == numGroups && numGroups != c;
+  if (!perGroupAffine && sf.length != c) {
+    throw ArgumentError('GroupNormalization scale length ${sf.length} '
+        'matches neither num_groups=$numGroups nor channels=$c');
+  }
   final xf = x.asFloatList();
   final out = Float32List(xf.length);
   for (int img = 0; img < n; img++) {
@@ -667,9 +683,10 @@ Tensor opGroupNormalization(
       final inv = 1.0 / math.sqrt(sq / groupLen + epsilon);
       for (int cc = 0; cc < cPerGroup; cc++) {
         final ch = g * cPerGroup + cc;
+        final affIdx = perGroupAffine ? g : ch;
         final cBase = base + cc * spN;
-        final a = sf[ch] * inv;
-        final b = bf[ch] - mean * a;
+        final a = sf[affIdx] * inv;
+        final b = bf[affIdx] - mean * a;
         for (int k = 0; k < spN; k++) {
           out[cBase + k] = xf[cBase + k] * a + b;
         }
@@ -686,7 +703,13 @@ Tensor opGridSample(Tensor x, Tensor grid,
     {String mode = 'linear',
     String paddingMode = 'zeros',
     bool alignCorners = false}) {
-  assert(x.rank == 4 && grid.rank == 4, 'GridSample implemented for 2-D');
+  if (x.rank != 4 || grid.rank != 4) {
+    throw UnsupportedError('GridSample: only 2-D (rank-4) inputs supported, '
+        'got input rank ${x.rank} / grid rank ${grid.rank}');
+  }
+  if (mode != 'linear' && mode != 'bilinear' && mode != 'nearest') {
+    throw UnsupportedError('GridSample: mode "$mode" not supported');
+  }
   final n = x.shape[0], c = x.shape[1], h = x.shape[2], w = x.shape[3];
   final ho = grid.shape[1], wo = grid.shape[2];
   final xf = x.asFloatList(), gf = grid.asFloatList();
@@ -722,7 +745,8 @@ Tensor opGridSample(Tensor x, Tensor grid,
     }
 
     if (mode == 'nearest') {
-      return pixel(sy.round(), sx.round());
+      // Round half to even, matching ORT's nearbyint.
+      return pixel(_roundEvenNn(sy), _roundEvenNn(sx));
     }
     final y0 = sy.floor(), x0 = sx.floor();
     final fy = sy - y0, fx = sx - x0;

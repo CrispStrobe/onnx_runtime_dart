@@ -29,7 +29,10 @@ Tensor _tensorFromJson(Map<String, dynamic> j) {
         shape);
   }
   return Tensor.float(
-      Float32List.fromList(data.map((v) => (v as num).toDouble()).toList()),
+      Float32List.fromList([
+        for (final v in data)
+          v is String ? double.parse(v) : (v as num).toDouble()
+      ]),
       shape);
 }
 
