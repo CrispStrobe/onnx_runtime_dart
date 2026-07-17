@@ -1,0 +1,61 @@
+#!/usr/bin/env python3
+"""Runs a real model through native onnxruntime on deterministic inputs and
+writes <out.json> with {"inputs": ..., "expected": ...} in the same tensor
+JSON format as the fixtures. Compare with:  dart run tool/live_parity.dart
+
+Usage: .venv/bin/python tool/live_parity.py <model.onnx> <out.json> [seq]
+"""
+import json
+import sys
+
+import numpy as np
+import onnxruntime as ort
+
+
+def tensor_json(a: np.ndarray) -> dict:
+    if a.dtype in (np.float32, np.float64):
+        return {"dtype": "float32", "shape": list(a.shape),
+                "data": [float(v) for v in a.astype(np.float32).ravel()]}
+    return {"dtype": "int64", "shape": list(a.shape),
+            "data": [int(v) for v in a.astype(np.int64).ravel()]}
+
+
+def main():
+    model_path, out_path = sys.argv[1], sys.argv[2]
+    seq = int(sys.argv[3]) if len(sys.argv) > 3 else 32
+    sess = ort.InferenceSession(model_path, providers=["CPUExecutionProvider"])
+
+    feed = {}
+    for inp in sess.get_inputs():
+        dims = [d if isinstance(d, int) and d > 0 else
+                (1 if i == 0 else seq) for i, d in enumerate(inp.shape)]
+        if inp.type == "tensor(int64)":
+            n = int(np.prod(dims))
+            if "mask" in inp.name:
+                v = np.ones(dims, np.int64)
+            elif "type" in inp.name:
+                v = np.zeros(dims, np.int64)
+            elif "position" in inp.name:
+                v = (np.arange(n) % seq).reshape(dims).astype(np.int64)
+            else:
+                v = (1000 + (np.arange(n) * 37) % 999).reshape(dims)
+                v.ravel()[0] = 101
+                v.ravel()[-1] = 102
+            feed[inp.name] = v.astype(np.int64)
+        else:
+            n = int(np.prod(dims))
+            v = (((np.arange(n) * 2654435761) & 0xFFFF) / 32768.0 - 1.0)
+            feed[inp.name] = v.reshape(dims).astype(np.float32)
+
+    out_names = [o.name for o in sess.get_outputs()]
+    outs = sess.run(out_names, feed)
+    json.dump({
+        "inputs": {k: tensor_json(v) for k, v in feed.items()},
+        "expected": {k: tensor_json(v) for k, v in zip(out_names, outs)},
+    }, open(out_path, "w"))
+    print(f"wrote {out_path}: inputs {[list(v.shape) for v in feed.values()]}"
+          f" -> outputs {[list(v.shape) for v in outs]}")
+
+
+if __name__ == "__main__":
+    main()

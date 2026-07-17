@@ -8,6 +8,10 @@ library;
 import 'dart:math' as math;
 import 'dart:typed_data';
 
+// SIMD GEMM kernel on native targets (VM/AOT, where Float32x4 maps to real
+// SSE/NEON); portable scalar kernel on web targets where it's emulated.
+import 'gemm_kernel_scalar.dart' if (dart.library.ffi) 'gemm_kernel_simd.dart'
+    as gemm;
 import 'tensor.dart';
 
 // ---------------------------------------------------------------------------
@@ -66,6 +70,215 @@ bool _shapeEq(List<int> a, List<int> b) {
     if (a[k] != b[k]) return false;
   }
   return true;
+}
+
+enum _Arith { add, sub, mul, div }
+
+/// True if [small] (leading 1-dims ignored) equals the trailing dims of [big]
+/// — i.e. broadcasting [small] against [big] just tiles it along the leading
+/// axes, so no per-element coordinate math is needed.
+bool _isTrailingSuffix(List<int> small, List<int> big) {
+  int s = 0;
+  while (s < small.length && small[s] == 1) {
+    s++;
+  }
+  final n = small.length - s;
+  if (n > big.length) return false;
+  for (int k = 0; k < n; k++) {
+    if (small[small.length - 1 - k] != big[big.length - 1 - k]) return false;
+  }
+  return true;
+}
+
+/// Monomorphic float32 paths for Add/Sub/Mul/Div — the hottest elementwise
+/// ops. Direct Float32List indexing (no per-element closure or dtype branch)
+/// for the three layouts that cover essentially all transformer traffic:
+/// same-shape, scalar, and suffix-tile (bias adds like `[B,T,N] + [N]`).
+/// Returns null when the layout (or dtype) needs the general path.
+Tensor? _arithFloatFast(Tensor a, Tensor b, _Arith op) {
+  final af = a.f, bf = b.f;
+  if (af == null || bf == null) return null;
+  final an = a.length, bn = b.length;
+
+  if (_shapeEq(a.shape, b.shape)) {
+    final out = Float32List(an);
+    switch (op) {
+      case _Arith.add:
+        for (int k = 0; k < an; k++) {
+          out[k] = af[k] + bf[k];
+        }
+      case _Arith.sub:
+        for (int k = 0; k < an; k++) {
+          out[k] = af[k] - bf[k];
+        }
+      case _Arith.mul:
+        for (int k = 0; k < an; k++) {
+          out[k] = af[k] * bf[k];
+        }
+      case _Arith.div:
+        for (int k = 0; k < an; k++) {
+          out[k] = af[k] / bf[k];
+        }
+    }
+    return Tensor.float(out, a.shape);
+  }
+
+  if (bn == 1 && a.rank >= b.rank) {
+    final s = bf[0];
+    final out = Float32List(an);
+    switch (op) {
+      case _Arith.add:
+        for (int k = 0; k < an; k++) {
+          out[k] = af[k] + s;
+        }
+      case _Arith.sub:
+        for (int k = 0; k < an; k++) {
+          out[k] = af[k] - s;
+        }
+      case _Arith.mul:
+        for (int k = 0; k < an; k++) {
+          out[k] = af[k] * s;
+        }
+      case _Arith.div:
+        for (int k = 0; k < an; k++) {
+          out[k] = af[k] / s;
+        }
+    }
+    return Tensor.float(out, a.shape);
+  }
+  if (an == 1 && b.rank >= a.rank) {
+    final s = af[0];
+    final out = Float32List(bn);
+    switch (op) {
+      case _Arith.add:
+        for (int k = 0; k < bn; k++) {
+          out[k] = s + bf[k];
+        }
+      case _Arith.sub:
+        for (int k = 0; k < bn; k++) {
+          out[k] = s - bf[k];
+        }
+      case _Arith.mul:
+        for (int k = 0; k < bn; k++) {
+          out[k] = s * bf[k];
+        }
+      case _Arith.div:
+        for (int k = 0; k < bn; k++) {
+          out[k] = s / bf[k];
+        }
+    }
+    return Tensor.float(out, b.shape);
+  }
+
+  // Per-row scalar: b matches a except the last axis is 1 (LayerNorm's
+  // `x - mean` / `x / std` pattern, [B,T,D] op [B,T,1]).
+  if (a.rank >= 1 &&
+      b.rank == a.rank &&
+      b.shape[a.rank - 1] == 1 &&
+      a.shape[a.rank - 1] > 1 &&
+      _shapeEq(a.shape.sublist(0, a.rank - 1), b.shape.sublist(0, b.rank - 1))) {
+    final d = a.shape[a.rank - 1];
+    final rows = bn; // = an ~/ d
+    final out = Float32List(an);
+    switch (op) {
+      case _Arith.add:
+        for (int r = 0; r < rows; r++) {
+          final s = bf[r], base = r * d;
+          for (int j = 0; j < d; j++) {
+            out[base + j] = af[base + j] + s;
+          }
+        }
+      case _Arith.sub:
+        for (int r = 0; r < rows; r++) {
+          final s = bf[r], base = r * d;
+          for (int j = 0; j < d; j++) {
+            out[base + j] = af[base + j] - s;
+          }
+        }
+      case _Arith.mul:
+        for (int r = 0; r < rows; r++) {
+          final s = bf[r], base = r * d;
+          for (int j = 0; j < d; j++) {
+            out[base + j] = af[base + j] * s;
+          }
+        }
+      case _Arith.div:
+        for (int r = 0; r < rows; r++) {
+          final s = bf[r], base = r * d;
+          for (int j = 0; j < d; j++) {
+            out[base + j] = af[base + j] / s;
+          }
+        }
+    }
+    return Tensor.float(out, a.shape);
+  }
+
+  // Suffix tile, b smaller: out[off+j] = a[off+j] op b[j]. Output shape is
+  // the broadcast shape, which here is a.shape (possibly with b's extra
+  // leading 1-dims — only possible when b.rank <= a.rank, so require that).
+  if (bn < an && b.rank <= a.rank && _isTrailingSuffix(b.shape, a.shape)) {
+    final out = Float32List(an);
+    switch (op) {
+      case _Arith.add:
+        for (int off = 0; off < an; off += bn) {
+          for (int j = 0; j < bn; j++) {
+            out[off + j] = af[off + j] + bf[j];
+          }
+        }
+      case _Arith.sub:
+        for (int off = 0; off < an; off += bn) {
+          for (int j = 0; j < bn; j++) {
+            out[off + j] = af[off + j] - bf[j];
+          }
+        }
+      case _Arith.mul:
+        for (int off = 0; off < an; off += bn) {
+          for (int j = 0; j < bn; j++) {
+            out[off + j] = af[off + j] * bf[j];
+          }
+        }
+      case _Arith.div:
+        for (int off = 0; off < an; off += bn) {
+          for (int j = 0; j < bn; j++) {
+            out[off + j] = af[off + j] / bf[j];
+          }
+        }
+    }
+    return Tensor.float(out, a.shape);
+  }
+  // Suffix tile, a smaller (kept separate: Sub/Div aren't commutative).
+  if (an < bn && a.rank <= b.rank && _isTrailingSuffix(a.shape, b.shape)) {
+    final out = Float32List(bn);
+    switch (op) {
+      case _Arith.add:
+        for (int off = 0; off < bn; off += an) {
+          for (int j = 0; j < an; j++) {
+            out[off + j] = af[j] + bf[off + j];
+          }
+        }
+      case _Arith.sub:
+        for (int off = 0; off < bn; off += an) {
+          for (int j = 0; j < an; j++) {
+            out[off + j] = af[j] - bf[off + j];
+          }
+        }
+      case _Arith.mul:
+        for (int off = 0; off < bn; off += an) {
+          for (int j = 0; j < an; j++) {
+            out[off + j] = af[j] * bf[off + j];
+          }
+        }
+      case _Arith.div:
+        for (int off = 0; off < bn; off += an) {
+          for (int j = 0; j < an; j++) {
+            out[off + j] = af[j] / bf[off + j];
+          }
+        }
+    }
+    return Tensor.float(out, b.shape);
+  }
+
+  return null;
 }
 
 Tensor _elementwiseBinary(
@@ -166,12 +379,38 @@ Tensor _elementwiseBinary(
 // Elementwise ops
 // ---------------------------------------------------------------------------
 
-Tensor opAdd(Tensor a, Tensor b) => _elementwiseBinary(a, b, (x, y) => x + y);
-Tensor opSub(Tensor a, Tensor b) => _elementwiseBinary(a, b, (x, y) => x - y);
-Tensor opMul(Tensor a, Tensor b) => _elementwiseBinary(a, b, (x, y) => x * y);
-Tensor opDiv(Tensor a, Tensor b) => _elementwiseBinary(a, b, (x, y) => x / y);
-Tensor opPow(Tensor a, Tensor b) =>
-    _elementwiseBinary(a, b, (x, y) => math.pow(x, y).toDouble());
+Tensor opAdd(Tensor a, Tensor b) =>
+    _arithFloatFast(a, b, _Arith.add) ??
+    _elementwiseBinary(a, b, (x, y) => x + y);
+Tensor opSub(Tensor a, Tensor b) =>
+    _arithFloatFast(a, b, _Arith.sub) ??
+    _elementwiseBinary(a, b, (x, y) => x - y);
+Tensor opMul(Tensor a, Tensor b) =>
+    _arithFloatFast(a, b, _Arith.mul) ??
+    _elementwiseBinary(a, b, (x, y) => x * y);
+Tensor opDiv(Tensor a, Tensor b) =>
+    _arithFloatFast(a, b, _Arith.div) ??
+    _elementwiseBinary(a, b, (x, y) => x / y);
+Tensor opPow(Tensor a, Tensor b) {
+  // Scalar exponent (LayerNorm's `(x-mean)^2`, sqrt-as-pow etc.) — direct
+  // loop, and plain multiply for the ubiquitous square.
+  if (a.f != null && b.length == 1 && a.rank >= b.rank) {
+    final e = b.getD(0);
+    final af = a.f!;
+    final out = Float32List(af.length);
+    if (e == 2.0) {
+      for (int k = 0; k < af.length; k++) {
+        out[k] = af[k] * af[k];
+      }
+    } else {
+      for (int k = 0; k < af.length; k++) {
+        out[k] = math.pow(af[k], e).toDouble();
+      }
+    }
+    return Tensor.float(out, a.shape);
+  }
+  return _elementwiseBinary(a, b, (x, y) => math.pow(x, y).toDouble());
+}
 
 Tensor _elementwiseUnary(Tensor a, double Function(double) op) {
   final out = Float32List(a.length);
@@ -184,6 +423,31 @@ Tensor _elementwiseUnary(Tensor a, double Function(double) op) {
 Tensor opSqrt(Tensor a) => _elementwiseUnary(a, (x) => math.sqrt(x));
 Tensor opReciprocal(Tensor a) => _elementwiseUnary(a, (x) => 1.0 / x);
 Tensor opRelu(Tensor a) => _elementwiseUnary(a, (x) => x < 0 ? 0.0 : x);
+Tensor opLeakyRelu(Tensor a, double alpha) =>
+    _elementwiseUnary(a, (x) => x < 0 ? alpha * x : x);
+Tensor opElu(Tensor a, double alpha) =>
+    _elementwiseUnary(a, (x) => x < 0 ? alpha * (math.exp(x) - 1) : x);
+Tensor opHardSigmoid(Tensor a, double alpha, double beta) =>
+    _elementwiseUnary(a, (x) => (alpha * x + beta).clamp(0.0, 1.0));
+
+/// `HardSwish`: `x * hardSigmoid(x)` with the spec-fixed alpha=1/6, beta=0.5.
+Tensor opHardSwish(Tensor a) =>
+    _elementwiseUnary(a, (x) => x * (x / 6 + 0.5).clamp(0.0, 1.0));
+Tensor opSoftplus(Tensor a) =>
+    _elementwiseUnary(a, (x) => math.log(1 + math.exp(x)));
+
+/// `Gelu`: exact (erf) form, or the tanh approximation when
+/// `approximate="tanh"`.
+Tensor opGelu(Tensor a, {bool tanhApprox = false}) => tanhApprox
+    ? _elementwiseUnary(a, (x) {
+        const c = 0.7978845608028654; // sqrt(2/pi)
+        return 0.5 * x * (1 + _tanh(c * (x + 0.044715 * x * x * x)));
+      })
+    : _elementwiseUnary(a, (x) => 0.5 * x * (1 + _erf(x / math.sqrt2)));
+
+/// `PRelu`: `x < 0 ? slope * x : x`, with [slope] broadcast onto [x].
+Tensor opPRelu(Tensor x, Tensor slope) =>
+    _elementwiseBinary(x, slope, (v, s) => v < 0 ? s * v : v);
 
 // Erf via the Abramowitz & Stegun 7.1.26 approximation (public numerical
 // analysis formula, max abs error ~1.5e-7) — needed for the GELU activation
@@ -200,7 +464,18 @@ double _erf(double x) {
   return sign * y;
 }
 
-Tensor opErf(Tensor a) => _elementwiseUnary(a, _erf);
+// Direct loop rather than _elementwiseUnary: Erf is hot (GELU runs it over
+// the whole FFN activation) and the per-element closure call costs as much
+// as the math at this size.
+Tensor opErf(Tensor a) {
+  final af = a.f;
+  if (af == null) return _elementwiseUnary(a, _erf);
+  final out = Float32List(af.length);
+  for (int k = 0; k < af.length; k++) {
+    out[k] = _erf(af[k]);
+  }
+  return Tensor.float(out, a.shape);
+}
 
 Tensor opClip(Tensor x, Tensor? min, Tensor? max) {
   final lo = min != null ? min.getD(0) : double.negativeInfinity;
@@ -251,29 +526,62 @@ Tensor opTranspose(Tensor x, List<int> perm) {
   final newShape = [for (final p in perm) x.shape[p]];
   final n = x.length;
   final oldStrides = x.strides;
-  if (x.isFloat) {
+  final rank = perm.length;
+
+  // Permuted source strides in output-axis order, so walking the output in
+  // order just adds permStrides[k] when output coordinate k increments.
+  final permStrides = [for (final p in perm) oldStrides[p]];
+
+  // Fast path: the last axis stays last (e.g. attention's [B,T,H,D] ->
+  // [B,H,T,D]) — both source and destination rows of length `last` are
+  // contiguous, so copy row-blocks instead of single elements.
+  if (x.isFloat && rank >= 2 && perm[rank - 1] == rank - 1) {
+    final last = newShape[rank - 1];
     final out = Float32List(n);
-    for (int idx = 0; idx < n; idx++) {
-      final newCoords = _unflatten(idx, newShape);
-      int oldFlat = 0;
-      for (int k = 0; k < perm.length; k++) {
-        oldFlat += newCoords[k] * oldStrides[perm[k]];
+    final xf = x.f!;
+    final coords = List<int>.filled(rank - 1, 0);
+    int srcOff = 0;
+    for (int dst = 0; dst < n; dst += last) {
+      out.setRange(dst, dst + last, xf, srcOff);
+      for (int k = rank - 2; k >= 0; k--) {
+        srcOff += permStrides[k];
+        if (++coords[k] < newShape[k]) break;
+        coords[k] = 0;
+        srcOff -= newShape[k] * permStrides[k];
       }
-      out[idx] = x.f![oldFlat];
     }
     return Tensor.float(out, newShape);
-  } else {
-    final out = Int64List(n);
-    for (int idx = 0; idx < n; idx++) {
-      final newCoords = _unflatten(idx, newShape);
-      int oldFlat = 0;
-      for (int k = 0; k < perm.length; k++) {
-        oldFlat += newCoords[k] * oldStrides[perm[k]];
-      }
-      out[idx] = x.i![oldFlat];
-    }
-    return Tensor.int64(out, newShape);
   }
+
+  // General path: incremental coordinate walk, no per-element allocation.
+  final coords = List<int>.filled(rank, 0);
+  int srcOff = 0;
+  if (x.isFloat) {
+    final out = Float32List(n);
+    final xf = x.f!;
+    for (int idx = 0; idx < n; idx++) {
+      out[idx] = xf[srcOff];
+      for (int k = rank - 1; k >= 0; k--) {
+        srcOff += permStrides[k];
+        if (++coords[k] < newShape[k]) break;
+        coords[k] = 0;
+        srcOff -= newShape[k] * permStrides[k];
+      }
+    }
+    return Tensor.float(out, newShape);
+  }
+  final out = Int64List(n);
+  final xi = x.i!;
+  for (int idx = 0; idx < n; idx++) {
+    out[idx] = xi[srcOff];
+    for (int k = rank - 1; k >= 0; k--) {
+      srcOff += permStrides[k];
+      if (++coords[k] < newShape[k]) break;
+      coords[k] = 0;
+      srcOff -= newShape[k] * permStrides[k];
+    }
+  }
+  return Tensor.int64(out, newShape);
 }
 
 Tensor opSqueeze(Tensor x, List<int>? axes) {
@@ -521,6 +829,27 @@ Tensor opReduceMean(Tensor x, List<int>? axes, bool keepdims) {
       .map((a) => a < 0 ? a + rank : a)
       .toSet();
 
+  // Fast path: reducing only the last axis (LayerNorm's mean) — each output
+  // is the mean of one contiguous row.
+  if (x.isFloat && ax.length == 1 && ax.first == rank - 1 && rank >= 1) {
+    final d = x.shape[rank - 1];
+    final rows = d == 0 ? 0 : x.length ~/ d;
+    final out = Float32List(rows);
+    final xf = x.f!;
+    for (int r = 0; r < rows; r++) {
+      final base = r * d;
+      double sum = 0;
+      for (int k = 0; k < d; k++) {
+        sum += xf[base + k];
+      }
+      out[r] = sum / d;
+    }
+    final shape = keepdims
+        ? [...x.shape.sublist(0, rank - 1), 1]
+        : x.shape.sublist(0, rank - 1);
+    return Tensor.float(out, shape);
+  }
+
   final outShapeFull = [
     for (int k = 0; k < rank; k++) ax.contains(k) ? 1 : x.shape[k]
   ];
@@ -646,22 +975,9 @@ Tensor opMatMul(Tensor a, Tensor b) {
     final bOff = bBatchFlat * bMatSize;
     final outOff = batch * m * n;
     if (af != null && bf != null) {
-      // Direct-indexed, i-k-j loop order: for each (i,kk) we sweep the whole
-      // b-row and out-row contiguously, which is far more cache-friendly
-      // than the naive i-j-k order (and avoids getD's per-element dtype
-      // branch) — this is what actually made inference usable (~20s -> ms).
-      for (int i = 0; i < m; i++) {
-        final outRow = outOff + i * n;
-        final aRow = aOff + i * k;
-        for (int kk = 0; kk < k; kk++) {
-          final aVal = af[aRow + kk];
-          if (aVal == 0) continue;
-          final bRow = bOff + kk * n;
-          for (int j = 0; j < n; j++) {
-            out[outRow + j] += aVal * bf[bRow + j];
-          }
-        }
-      }
+      // Tiled (and, on native targets, SIMD) micro-kernel — see
+      // gemm_kernel_simd.dart for the strategy.
+      gemm.matmulKernel(af, aOff, bf, bOff, out, outOff, m, k, n);
     } else {
       for (int i = 0; i < m; i++) {
         for (int j = 0; j < n; j++) {

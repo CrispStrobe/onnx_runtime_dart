@@ -30,7 +30,7 @@ import 'src/onnx_proto_loader.dart';
 import 'src/tensor.dart';
 
 export 'src/tensor.dart' show Tensor, DType;
-export 'src/onnx_graph.dart' show OnnxGraphExecutor;
+export 'src/onnx_graph.dart' show OnnxGraphExecutor, ExecutionProfile;
 export 'src/onnx_proto_loader.dart' show ExternalDataResolver;
 
 /// A parsed ONNX model ready to run.
@@ -57,9 +57,12 @@ class OnnxModel {
 
   /// Runs the graph with the given named [inputs] and returns the requested
   /// named [outputNames].
+  ///
+  /// Pass a [profile] to accumulate per-op-type wall time across the run.
   Map<String, Tensor> run(
     Map<String, Tensor> inputs,
-    List<String> outputNames,
-  ) =>
-      _executor.run(inputs, outputNames);
+    List<String> outputNames, {
+    ExecutionProfile? profile,
+  }) =>
+      _executor.run(inputs, outputNames, profile: profile);
 }

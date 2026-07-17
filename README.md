@@ -5,15 +5,24 @@ native `onnxruntime` — the graph is interpreted in plain Dart, so the same cod
 runs on **every Dart/Flutter target, including the web and WebAssembly**.
 
 It implements the operator set used by **transformer / attention** style models
-(BERT-family text embedders, rerankers, and RoPE / ALiBi variants). It is
-deliberately *not* a complete ONNX runtime — there are no convolution, pooling
-or recurrent ops.
+(BERT-family text embedders, rerankers, and RoPE / ALiBi variants) plus the
+**convolution / pooling** family used by CNN vision models. It is still not a
+complete ONNX runtime — notably there are no recurrent (LSTM/GRU), control-flow
+(`If`/`Loop`/`Scan`) or quantized ops yet.
 
 Verified to **cosine-1.0 parity** against ONNX Runtime (via `ort`), max abs diff
 ~1e-6 (float32 rounding), on: `jina-embeddings-v2-base-en` (BERT + ALiBi),
 `bge-small-en-v1.5`, `all-MiniLM-L6-v2`, `ms-marco-MiniLM` (cross-encoder
-reranker), the `nllb-200-600M` encoder (seq2seq / mBART), and a 0.6B **RoPE**
-embedder (external-data weights).
+reranker), the `nllb-200-600M` encoder (seq2seq / mBART), a 0.6B **RoPE**
+embedder (external-data weights), and the vision CNNs **MobileNetV2** and
+**ResNet18**. Every op is additionally covered by generated per-op parity
+fixtures against native ONNX Runtime (`test/fixtures/`, see
+`tool/gen_fixtures.py`).
+
+Execution uses a packed, register-tiled **`Float32x4` SIMD GEMM kernel** on
+native targets (scalar fallback on web), im2col convolution, load-time
+constant folding and weight prepacking; see `BENCHMARKS.md` for current
+numbers vs native ONNX Runtime.
 
 ## Install
 
@@ -63,6 +72,13 @@ self-contained, runnable graph built with the protobuf types.
   `Cast`, `Constant`, `ConstantOfShape`.
 - **Reduce / linalg:** `ReduceMean`, `ReduceSum`, `CumSum`, `Softmax`,
   `LayerNormalization`, `MatMul`, `Gemm`, `Einsum`.
+- **Convolution / pooling:** `Conv` (1–3 spatial dims, strides / pads /
+  dilations / groups / depthwise / auto_pad, im2col+GEMM fast path),
+  `ConvTranspose`, `MaxPool`, `AveragePool`, `GlobalAveragePool`,
+  `GlobalMaxPool`, `BatchNormalization`, `InstanceNormalization`, `Resize`
+  (nearest + linear), `Flatten`.
+- **Activations:** `LeakyRelu`, `Elu`, `PRelu`, `HardSigmoid`, `HardSwish`,
+  `Softplus`, `Gelu` (erf + tanh forms).
 
 Tensors are float32 or int64 (int32 and bool are widened to int64), row-major
 (matching ONNX's own layout). An unimplemented op throws `UnsupportedError`
