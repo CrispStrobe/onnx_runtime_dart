@@ -102,15 +102,58 @@ Uint8List _rawBytes(TensorProto t, ExternalDataResolver? ext) {
   return Uint8List.fromList(t.rawData);
 }
 
+/// Element count = product of [shape], validated. A malformed model can carry
+/// a negative dimension (or dims whose product overflows to negative), which
+/// would otherwise surface as an opaque RangeError when allocating the typed
+/// output list. Reject it with a clear message instead.
+int _elementCount(List<int> shape, TensorProto t) {
+  var n = 1;
+  for (final d in shape) {
+    if (d < 0) {
+      throw FormatException('Tensor "${t.name}" has a negative dimension $d');
+    }
+    n *= d;
+  }
+  if (n < 0) {
+    throw FormatException('Tensor "${t.name}" shape ${shape} overflows');
+  }
+  return n;
+}
+
+/// Reject a raw_data buffer too short to hold [n] elements of [elemSize] bytes.
+/// The division form avoids overflowing `n * elemSize` for a huge declared
+/// shape. Without this, the per-element `getFloat32`/`getInt64`/… reads run
+/// off the end of the buffer with an opaque RangeError.
+void _needRawLen(TensorProto t, int haveBytes, int n, int elemSize) {
+  if (n > haveBytes ~/ elemSize) {
+    throw FormatException('Tensor "${t.name}" raw_data too short: $haveBytes '
+        'bytes for $n elements of $elemSize bytes');
+  }
+}
+
+/// Reject inline typed data (float_data/int64_data/…) whose length disagrees
+/// with the shape product [n]. A well-formed tensor carries exactly [n]
+/// values; a mismatch would otherwise build a Tensor whose data length and
+/// declared shape disagree — a silent corruption that detonates downstream.
+void _needInlineLen(TensorProto t, int have, int n) {
+  if (have != n) {
+    throw FormatException('Tensor "${t.name}" inline data length $have does '
+        'not match shape product $n');
+  }
+}
+
 Tensor tensorFromProto(TensorProto t, {ExternalDataResolver? ext}) {
   final shape = t.dims.map((d) => d.toInt()).toList();
-  final n = shape.fold<int>(1, (a, b) => a * b);
+  final n = _elementCount(shape, t);
 
   if (t.dataType == _kFloat) {
     if (t.floatData.isNotEmpty) {
+      _needInlineLen(t, t.floatData.length, n);
       return Tensor.float(Float32List.fromList(t.floatData), shape);
     }
-    final bd = ByteData.sublistView(_rawBytes(t, ext));
+    final bytes = _rawBytes(t, ext);
+    _needRawLen(t, bytes.length, n, 4);
+    final bd = ByteData.sublistView(bytes);
     final out = Float32List(n);
     for (int i = 0; i < n; i++) {
       out[i] = bd.getFloat32(i * 4, Endian.little);
@@ -118,11 +161,14 @@ Tensor tensorFromProto(TensorProto t, {ExternalDataResolver? ext}) {
     return Tensor.float(out, shape);
   } else if (t.dataType == _kInt64) {
     if (t.int64Data.isNotEmpty) {
+      _needInlineLen(t, t.int64Data.length, n);
       return Tensor.int64(
           Int64List.fromList(t.int64Data.map((v) => v.toInt()).toList()),
           shape);
     }
-    final bd = ByteData.sublistView(_rawBytes(t, ext));
+    final bytes = _rawBytes(t, ext);
+    _needRawLen(t, bytes.length, n, 8);
+    final bd = ByteData.sublistView(bytes);
     final out = Int64List(n);
     for (int i = 0; i < n; i++) {
       out[i] = bd.getInt64(i * 8, Endian.little);
@@ -130,9 +176,12 @@ Tensor tensorFromProto(TensorProto t, {ExternalDataResolver? ext}) {
     return Tensor.int64(out, shape);
   } else if (t.dataType == _kInt32) {
     if (t.int32Data.isNotEmpty) {
+      _needInlineLen(t, t.int32Data.length, n);
       return Tensor.int64(Int64List.fromList(t.int32Data), shape);
     }
-    final bd = ByteData.sublistView(_rawBytes(t, ext));
+    final bytes = _rawBytes(t, ext);
+    _needRawLen(t, bytes.length, n, 4);
+    final bd = ByteData.sublistView(bytes);
     final out = Int64List(n);
     for (int i = 0; i < n; i++) {
       out[i] = bd.getInt32(i * 4, Endian.little);
@@ -141,13 +190,16 @@ Tensor tensorFromProto(TensorProto t, {ExternalDataResolver? ext}) {
   } else if (t.dataType == _kDouble) {
     // float64 weights, narrowed to our float32 carrier.
     if (t.doubleData.isNotEmpty) {
+      _needInlineLen(t, t.doubleData.length, n);
       final out = Float32List(n);
       for (int i = 0; i < n; i++) {
         out[i] = t.doubleData[i];
       }
       return Tensor.float(out, shape);
     }
-    final bd = ByteData.sublistView(_rawBytes(t, ext));
+    final bytes = _rawBytes(t, ext);
+    _needRawLen(t, bytes.length, n, 8);
+    final bd = ByteData.sublistView(bytes);
     final out = Float32List(n);
     for (int i = 0; i < n; i++) {
       out[i] = bd.getFloat64(i * 8, Endian.little);
@@ -155,7 +207,9 @@ Tensor tensorFromProto(TensorProto t, {ExternalDataResolver? ext}) {
     return Tensor.float(out, shape);
   } else if (t.dataType == _kFloat16) {
     // Half-precision weights, widened to float32 (bit-exact).
-    final src = ByteData.sublistView(_rawBytes(t, ext));
+    final bytes = _rawBytes(t, ext);
+    _needRawLen(t, bytes.length, n, 2);
+    final src = ByteData.sublistView(bytes);
     final out = Float32List(n);
     final outBits = Uint32List.view(out.buffer);
     for (int i = 0; i < n; i++) {
@@ -167,20 +221,23 @@ Tensor tensorFromProto(TensorProto t, {ExternalDataResolver? ext}) {
     // (int32_data is the inline carrier for both per the proto spec).
     final signed = t.dataType == _kInt8;
     if (t.int32Data.isNotEmpty) {
+      _needInlineLen(t, t.int32Data.length, n);
       return signed
           ? Tensor.int8(Int8List.fromList(t.int32Data), shape)
           : Tensor.uint8(Uint8List.fromList(t.int32Data), shape);
     }
     final bytes = _rawBytes(t, ext);
+    _needRawLen(t, bytes.length, n, 1);
     return signed
         ? Tensor.int8(Int8List.sublistView(bytes, 0, n), shape)
         : Tensor.uint8(Uint8List.sublistView(bytes, 0, n), shape);
   } else if (t.dataType == _kBool) {
     // BOOL is one byte per element, carried as int64 0/1.
     final bytes = _rawBytes(t, ext);
+    _needRawLen(t, bytes.length, n, 1);
     final out = Int64List(n);
     for (int i = 0; i < n; i++) {
-      out[i] = (i < bytes.length && bytes[i] != 0) ? 1 : 0;
+      out[i] = bytes[i] != 0 ? 1 : 0;
     }
     return Tensor.int64(out, shape);
   }
