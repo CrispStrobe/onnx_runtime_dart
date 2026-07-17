@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.3.0
+
+Major expansion: CNNs, recurrent models, control flow, quantization (all
+formats), audio front-ends, ~7-18x faster execution, and opt-in isolate
+parallelism. Every op is covered by generated parity fixtures against native
+ONNX Runtime (`test/fixtures/`), and 15 real models are verified live at
+cosine-1.0 (see README).
+
+- **Convolution / pooling family:** `Conv` (1-3 spatial dims, groups /
+  depthwise / dilations / auto_pad; im2col+GEMM fast path, branchless
+  depthwise kernel), `ConvTranspose`, `MaxPool`, `AveragePool`, global pools,
+  `BatchNormalization`, `InstanceNormalization`, `Resize`, `Flatten`, and the
+  common activations (`LeakyRelu`, `Elu`, `PRelu`, `HardSigmoid`, `HardSwish`,
+  `Softplus`, `Gelu`).
+- **Recurrent:** `LSTM` (peepholes), `GRU` (linear_before_reset), `RNN` —
+  forward / reverse / bidirectional, `sequence_lens`, initial states.
+- **Control flow:** `If`, `Loop`, `Scan` (incl. non-default axes/directions)
+  with subgraph execution and outer-scope capture; `Identity`, `Pad`
+  (constant/reflect/edge), `Size`, `Split`, `STFT`, `ReduceMax/Min/Prod`,
+  `ReduceSumSquare`, `QuantizeLinear`/`DequantizeLinear`/
+  `DynamicQuantizeLinear`, `MatMulInteger`, `ConvInteger`, `QLinearMatMul`,
+  `QLinearConv`, and `MatMulNBits` (com.microsoft int4).
+- **Quantized models:** QDQ and QOperator formats; compact 1-byte int8/uint8
+  tensor storage (a 1 GB int8 model runs in ~1 GB); int4 weights stay packed.
+  Exact float32-stepwise requantization semantics matching ORT.
+- **Performance:** packed register-tiled `Float32x4` SIMD GEMM (scalar web
+  fallback), load-time constant folding, weight prepacking, erf-GELU and
+  attention (scale+mask+softmax) fusion, broadcast/reduction fast paths.
+  MiniLM-L6 seq-32: 775 ms -> 66 ms single-threaded.
+- **Isolate pool (native):** `parallelize(workers: N)` + `runAsync` partition
+  large MatMul weights by column across worker isolates — bitwise-identical
+  results, ~66 -> 42 ms on MiniLM with 4 workers. Conv fan-out exists behind
+  `poolConv: true` (off by default; measure first).
+- **Profiling:** `run(..., profile: ExecutionProfile())` for per-op timings;
+  `run(inputs, ['*'])` returns every intermediate value for debugging.
+- **Weights:** int8/uint8 (compact), float64 (narrowed) and int4-packed
+  loading added to the existing float32/float16/int32/int64/bool support.
+- **Example:** `example/aecmos/` — a complete pure-Dart AECMOS echo-MOS
+  scorer (librosa-parity mel front-end + scorer), stage-tested against the
+  Python reference.
+
 ## 0.2.0
 
 - Extended the operator set for BERT-family text embedders, rerankers, and

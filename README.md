@@ -19,9 +19,12 @@ reranker), the `nllb-200-600M` encoder (seq2seq / mBART), a 0.6B **RoPE**
 embedder (external-data weights), the vision CNNs **MobileNetV2** and
 **ResNet18**, **Silero VAD** (Conv1D + LSTM + `If` + reflect-`Pad`),
 **AECMOS** (both echo-MOS models: Conv + MaxPool + bidirectional GRU +
-ReduceMax), **CAM++** (speaker-embedding x-vector: 225 convs +
-BatchNorm/AveragePool/Pad/ReduceProd), and **Maia3-5M** (chess transformer,
-policy + WDL value heads, Einsum attention).
+ReduceMax — with a complete pure-Dart scoring pipeline in
+[`example/aecmos/`](example/aecmos/)), **CAM++** (speaker-embedding x-vector:
+225 convs + BatchNorm/AveragePool/Pad/ReduceProd), **Maia3-5M** (chess
+transformer, policy + WDL value heads, Einsum attention), and from the
+**Parakeet-TDT 0.6B** ASR stack: the NeMo mel featurizer (`STFT` op +
+float64 weights) and the RNN-T decoder/joint (LSTM + Split).
 Every op is additionally covered by generated per-op parity fixtures against
 native ONNX Runtime (`test/fixtures/`, see `tool/gen_fixtures.py`).
 

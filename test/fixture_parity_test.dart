@@ -66,7 +66,7 @@ void main() {
           return;
         }
         final w = want.asFloatList(), h = have.asFloatList();
-        double maxAbs = 0;
+        double maxAbs = 0, maxMag = 0;
         int at = -1;
         for (int k = 0; k < w.length; k++) {
           final d = (w[k] - h[k]).abs();
@@ -74,10 +74,16 @@ void main() {
             maxAbs = d;
             at = k;
           }
+          if (w[k].abs() > maxMag) maxMag = w[k].abs();
         }
-        expect(maxAbs, lessThanOrEqualTo(_tolerance),
+        // Mixed tolerance: ops whose outputs are large-magnitude sums (STFT
+        // bins, integer accumulators) legitimately differ by float rounding
+        // proportional to the value scale.
+        final tol = math.max(_tolerance, 2e-5 * maxMag);
+        expect(maxAbs, lessThanOrEqualTo(tol),
             reason: '$name/$outName max|Δ|=$maxAbs at flat index $at '
-                '(ort=${at >= 0 ? w[at] : '-'}, dart=${at >= 0 ? h[at] : '-'})');
+                '(ort=${at >= 0 ? w[at] : '-'}, dart=${at >= 0 ? h[at] : '-'}, '
+                'scale=$maxMag)');
         // Cosine similarity as a second, scale-aware signal.
         double dot = 0, nw = 0, nh = 0;
         for (int k = 0; k < w.length; k++) {

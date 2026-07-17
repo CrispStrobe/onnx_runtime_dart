@@ -11,8 +11,11 @@
 > at cosine-1.0 with packed weights. Scan axes/directions ✅. Conv pool
 > fan-out implemented + bitwise-tested but **off by default**
 > (`parallelize(poolConv: true)`): activation copying outweighs banded
-> compute at CNN latencies. Remaining: Gemm pool fan-out; QLinear per-row
-> a-scales. Numbers in `BENCHMARKS.md`;
+> compute at CNN latencies. STFT/Split/ReduceSumSquare/float64 weights ✅
+> (parakeet nemo128 featurizer + RNN-T decoder verified). Remaining: Gemm
+> pool fan-out; QLinear per-row a-scales; parakeet int8 conformer encoder
+> (ORT oracle itself rejects naive input synthesis — needs correct
+> length/rel-pos input constraints). Numbers in `BENCHMARKS.md`;
 > per-op ORT parity fixtures in `test/fixtures/` (`tool/gen_fixtures.py`),
 > live-model parity via `tool/live_parity.py|dart`.
 

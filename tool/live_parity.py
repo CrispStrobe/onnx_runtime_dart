@@ -43,6 +43,9 @@ def main():
         elif ("state" in inp.name or "hidden" in inp.name
               or inp.name in ("h0", "c0")):
             feed[inp.name] = np.zeros(dims, np.float32)
+        elif "len" in inp.name.lower():  # sequence/waveform lengths: full
+            it = np.int32 if inp.type == "tensor(int32)" else np.int64
+            feed[inp.name] = np.full(dims, seq, dtype=it)
         elif "elo" in inp.name.lower():  # rating conditioning (maia-style)
             it = np.int32 if inp.type == "tensor(int32)" else np.int64
             feed[inp.name] = np.full(dims, 1500, dtype=it)

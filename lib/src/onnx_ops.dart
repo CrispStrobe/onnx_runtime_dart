@@ -945,6 +945,90 @@ Tensor opReduceProd(Tensor x, List<int>? axes, bool keepdims) {
   return Tensor.int64(out, shape);
 }
 
+/// `ReduceSumSquare` — sum of squares over the given axes.
+Tensor opReduceSumSquare(Tensor x, List<int>? axes, bool keepdims) {
+  final squared = opMul(x, x);
+  return opReduceSum(squared, axes, keepdims);
+}
+
+/// `Split` — slices [x] along [axis] into [numOutputs] parts, sized by
+/// [splitSizes] when given, else evenly (ceil-divided, last part smaller —
+/// the opset-18 `num_outputs` rule, which reduces to equal parts when the
+/// axis divides evenly).
+List<Tensor> opSplit(Tensor x, int axis, int numOutputs,
+    [List<int>? splitSizes]) {
+  final ax = axis < 0 ? axis + x.rank : axis;
+  final dim = x.shape[ax];
+  final sizes = splitSizes ??
+      () {
+        final chunk = (dim + numOutputs - 1) ~/ numOutputs;
+        return [
+          for (int i = 0; i < numOutputs; i++)
+            i < numOutputs - 1 ? chunk : dim - chunk * (numOutputs - 1)
+        ];
+      }();
+  final outs = <Tensor>[];
+  int start = 0;
+  for (final size in sizes) {
+    outs.add(opSlice(x, [start], [start + size], [ax], null));
+    start += size;
+  }
+  return outs;
+}
+
+/// `STFT` (opset 17) — real input only, frame-major output
+/// `[batch, frames, bins, 2]` (re/im). No centering or padding: frames start
+/// at multiples of [frameStep] and must fit entirely inside the signal (the
+/// ONNX graph does its own `Pad` beforehand). [onesided] keeps
+/// `dftSize/2 + 1` bins. Odd or non-power-of-2 frame lengths are fine — bins
+/// come from a direct DFT over a single-period twiddle table.
+Tensor opSTFT(Tensor signal, int frameStep, Tensor? window, int? frameLength,
+    {bool onesided = true}) {
+  // Signal is [batch, len] or [batch, len, 1].
+  assert(
+      signal.rank == 2 || (signal.rank == 3 && signal.shape[2] == 1),
+      'STFT supports real signals only');
+  final batch = signal.shape[0], len = signal.shape[1];
+  final n = frameLength ?? window!.length;
+  final win = window?.asFloatList();
+  final frames = (len - n) ~/ frameStep + 1;
+  final bins = onesided ? n ~/ 2 + 1 : n;
+
+  final cosT = Float64List(n), sinT = Float64List(n);
+  for (int i = 0; i < n; i++) {
+    final a = -2 * math.pi * i / n;
+    cosT[i] = math.cos(a);
+    sinT[i] = math.sin(a);
+  }
+
+  final sf = signal.asFloatList();
+  final out = Float32List(batch * frames * bins * 2);
+  final frame = Float64List(n);
+  for (int b = 0; b < batch; b++) {
+    for (int f = 0; f < frames; f++) {
+      final src = b * len + f * frameStep;
+      for (int i = 0; i < n; i++) {
+        frame[i] = win == null ? sf[src + i] : sf[src + i] * win[i];
+      }
+      final outBase = ((b * frames) + f) * bins * 2;
+      for (int k = 0; k < bins; k++) {
+        double re = 0, im = 0;
+        int idx = 0;
+        for (int i = 0; i < n; i++) {
+          final v = frame[i];
+          re += v * cosT[idx];
+          im += v * sinT[idx];
+          idx += k;
+          if (idx >= n) idx -= n;
+        }
+        out[outBase + 2 * k] = re;
+        out[outBase + 2 * k + 1] = im;
+      }
+    }
+  }
+  return Tensor.float(out, [batch, frames, bins, 2]);
+}
+
 /// `ReduceMax` / `ReduceMin` (dtype-preserving, unlike the mean/sum
 /// reductions which are float by definition).
 Tensor opReduceMinMax(Tensor x, List<int>? axes, bool keepdims,

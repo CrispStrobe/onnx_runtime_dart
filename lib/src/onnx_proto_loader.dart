@@ -20,6 +20,7 @@ const int _kInt32 = 6;
 const int _kInt64 = 7;
 const int _kBool = 9;
 const int _kFloat16 = 10;
+const int _kDouble = 11;
 
 /// Expands an IEEE-754 half-precision bit pattern [h] to the bit pattern of the
 /// equivalent float32 (so fp16 weights can be widened without `dart:math`).
@@ -110,6 +111,21 @@ Tensor tensorFromProto(TensorProto t, {ExternalDataResolver? ext}) {
       out[i] = bd.getInt32(i * 4, Endian.little);
     }
     return Tensor.int64(out, shape);
+  } else if (t.dataType == _kDouble) {
+    // float64 weights, narrowed to our float32 carrier.
+    if (t.doubleData.isNotEmpty) {
+      final out = Float32List(n);
+      for (int i = 0; i < n; i++) {
+        out[i] = t.doubleData[i];
+      }
+      return Tensor.float(out, shape);
+    }
+    final bd = ByteData.sublistView(_rawBytes(t, ext));
+    final out = Float32List(n);
+    for (int i = 0; i < n; i++) {
+      out[i] = bd.getFloat64(i * 8, Endian.little);
+    }
+    return Tensor.float(out, shape);
   } else if (t.dataType == _kFloat16) {
     // Half-precision weights, widened to float32 (bit-exact).
     final src = ByteData.sublistView(_rawBytes(t, ext));

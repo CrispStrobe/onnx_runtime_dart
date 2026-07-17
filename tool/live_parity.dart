@@ -68,10 +68,11 @@ Future<void> main(List<String> args) async {
       return;
     }
     final w = want.asFloatList(), h = have.asFloatList();
-    double maxAbs = 0, dot = 0, nw = 0, nh = 0;
+    double maxAbs = 0, maxMag = 0, dot = 0, nw = 0, nh = 0;
     for (int k = 0; k < w.length; k++) {
       final d = (w[k] - h[k]).abs();
       if (d > maxAbs) maxAbs = d;
+      if (w[k].abs() > maxMag) maxMag = w[k].abs();
       dot += w[k] * h[k];
       nw += w[k] * w[k];
       nh += h[k] * h[k];
@@ -79,7 +80,9 @@ Future<void> main(List<String> args) async {
     final cos = nw > 0 && nh > 0 ? dot / (math.sqrt(nw) * math.sqrt(nh)) : 1.0;
     print('$name: shape=${have.shape} cosine=${cos.toStringAsFixed(9)} '
         'max|Δ|=${maxAbs.toStringAsExponential(2)} (${sw.elapsedMilliseconds}ms)');
-    if (cos < 0.999999 || maxAbs > 1e-3) ok = false;
+    // Mixed tolerance: large-magnitude outputs (logits, spectra) carry float
+    // rounding proportional to their scale.
+    if (cos < 0.999999 || maxAbs > math.max(1e-3, 2e-5 * maxMag)) ok = false;
   });
   if (!ok) exit(1);
 }

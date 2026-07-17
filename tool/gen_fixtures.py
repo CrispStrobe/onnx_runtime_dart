@@ -381,6 +381,32 @@ def main():
          [helper.make_node("ReduceProd", ["x"], ["out0"], axes=[0],
                            keepdims=1)],
          {"x": (f32(3, 4) * 0.5 + 1.0)}, opset=17)
+    emit("reducesumsquare",
+         [helper.make_node("ReduceSumSquare", ["x"], ["out0"], axes=[-1],
+                           keepdims=1)],
+         {"x": f32(2, 3, 5)}, opset=17)
+    emit("split_equal",
+         [helper.make_node("Split", ["x"], ["out0", "out1", "out2"], axis=1)],
+         {"x": f32(2, 9, 4)}, n_outputs=3)
+    emit("split_sizes",
+         [helper.make_node("Split", ["x", "sp"], ["out0", "out1"], axis=-1)],
+         {"x": f32(3, 7)},
+         initializers={"sp": np.array([2, 5], dtype=np.int64)}, n_outputs=2)
+    emit("split_uneven_numoutputs",
+         [helper.make_node("Split", ["x"], ["out0", "out1", "out2"], axis=0,
+                           num_outputs=3)],
+         {"x": f32(8, 3)}, opset=18, n_outputs=3)
+    # STFT (opset 17): windowed, hop 64, frame 128 (non-centered).
+    emit("stft_window",
+         [helper.make_node("STFT", ["x", "step", "win"], ["out0"])],
+         {"x": f32(1, 400)},
+         initializers={"step": np.array(64, dtype=np.int64),
+                       "win": np.hanning(128).astype(np.float32)}, opset=17)
+    emit("stft_no_window",
+         [helper.make_node("STFT", ["x", "step", "", "flen"], ["out0"])],
+         {"x": f32(2, 300)},
+         initializers={"step": np.array(100, dtype=np.int64),
+                       "flen": np.array(90, dtype=np.int64)}, opset=17)
     emit("reducemin_lastaxis",
          [helper.make_node("ReduceMin", ["x"], ["out0"], axes=[-1],
                            keepdims=1)],

@@ -831,6 +831,36 @@ class OnnxGraphExecutor {
             (attrs.getInt('keepdims') ?? 1) != 0,
           )
         ];
+      case 'ReduceSumSquare':
+        return [
+          ops.opReduceSumSquare(
+            need(0),
+            ins.length > 1 && ins[1] != null
+                ? ins[1]!.asIntList()
+                : attrs.getInts('axes'),
+            (attrs.getInt('keepdims') ?? 1) != 0,
+          )
+        ];
+      case 'Split':
+        // Opset 13+ takes split sizes as an input; opset 11 as an attribute.
+        return ops.opSplit(
+          need(0),
+          attrs.getInt('axis') ?? 0,
+          node.output.length,
+          ins.length > 1 && ins[1] != null
+              ? ins[1]!.asIntList().toList()
+              : attrs.getInts('split'),
+        );
+      case 'STFT':
+        return [
+          ops.opSTFT(
+            need(0),
+            need(1).getI(0),
+            ins.length > 2 ? ins[2] : null,
+            ins.length > 3 && ins[3] != null ? ins[3]!.getI(0) : null,
+            onesided: (attrs.getInt('onesided') ?? 1) != 0,
+          )
+        ];
       case 'ReduceProd':
         return [
           ops.opReduceProd(

@@ -87,12 +87,19 @@ Tensor opQLinearMatMul(Tensor a, Tensor aS, Tensor? aZp, Tensor b, Tensor bS,
     throw UnsupportedError('QLinearMatMul: only per-tensor scales supported');
   }
   final acc = opMatMulInteger(a, b, aZp, bZp);
-  final mult = aS.getD(0) * bS.getD(0) / yS.getD(0);
+  // The requant multiplier and product are float32 in the reference / ORT,
+  // rounded at each step — a single rounding from double lands on the other
+  // side of .5 boundaries (observed on real data).
+  final f32 = Float32List(1);
+  f32[0] = aS.getD(0) * bS.getD(0);
+  f32[0] = f32[0] / yS.getD(0);
+  final mult = f32[0].toDouble();
   final yz = yZp?.getI(0) ?? 0;
   final ai = acc.i!;
   final out = Int64List(ai.length);
   for (int i = 0; i < ai.length; i++) {
-    final q = _roundEven(ai[i] * mult) + yz;
+    f32[0] = ai[i] * mult;
+    final q = _roundEven(f32[0].toDouble()) + yz;
     out[i] = q < lo ? lo : (q > hi ? hi : q);
   }
   return Tensor.int64(out, acc.shape);
