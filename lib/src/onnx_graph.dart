@@ -77,7 +77,8 @@ class OnnxGraphExecutor {
   /// opset-sensitive, e.g. RoiAlign's coordinate transform).
   late final int _opset;
 
-  OnnxGraphExecutor(ModelProto model, {ExternalDataResolver? externalData})
+  OnnxGraphExecutor(ModelProto model,
+      {ExternalDataResolver? externalData, bool fuse = true})
       : _graph = model.graph,
         _ext = externalData {
     _opset = model.opsetImport
@@ -88,7 +89,8 @@ class OnnxGraphExecutor {
       _initializers[t.name] = tensorFromProto(t, ext: externalData);
       _initializerElemType[t.name] = t.dataType;
     }
-    _nodes = _fusePatterns(_foldConstants());
+    final folded = _foldConstants();
+    _nodes = fuse ? _fusePatterns(folded) : folded;
   }
 
   /// Rewrites known multi-node patterns into single fused nodes (synthetic

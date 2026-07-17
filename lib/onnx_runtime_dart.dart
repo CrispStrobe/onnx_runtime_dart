@@ -50,10 +50,12 @@ class OnnxModel {
   /// the bytes for a given `(location, offset, length)`. `OnnxModel.fromFile`
   /// in `package:onnx_runtime_dart/onnx_runtime_dart_io.dart` wires this up automatically for
   /// the native (`dart:io`) platforms.
+  /// [fuse] controls the load-time pattern fusion (GELU/SDPA/RMSNorm);
+  /// disable it to execute the graph exactly node-by-node (diagnostics).
   factory OnnxModel.fromBytes(Uint8List bytes,
-          {ExternalDataResolver? externalData}) =>
+          {ExternalDataResolver? externalData, bool fuse = true}) =>
       OnnxModel._(OnnxGraphExecutor(ModelProto.fromBuffer(bytes),
-          externalData: externalData));
+          externalData: externalData, fuse: fuse));
 
   /// Runs the graph with the given named [inputs] and returns the requested
   /// named [outputNames].

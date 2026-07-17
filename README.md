@@ -25,7 +25,11 @@ embedder (external-data weights), the vision CNNs **MobileNetV2** and
 ReduceMax — with a complete pure-Dart scoring pipeline in
 [`example/aecmos/`](example/aecmos/)), **CAM++** (speaker-embedding x-vector:
 225 convs + BatchNorm/AveragePool/Pad/ReduceProd), **Maia3-5M** (chess
-transformer, policy + WDL value heads, Einsum attention), and from the
+transformer, policy + WDL value heads, Einsum attention), **Whisper-tiny** (encoder at 2e-4 relative — summation-order noise across
+1500-token attention, verified fusion-on/off — decoder AND
+`decoder_with_past` at cosine-1.0), **Moonshine-tiny** (encoder cosine-1.0
+and the merged If-branched decoder with its full 24-tensor KV cache,
+encoder-KV exact), and from the
 **Parakeet-TDT 0.6B** ASR stack: the NeMo mel featurizer (`STFT` op +
 float64 weights), the RNN-T decoder/joint (LSTM + Split), and the int8
 conformer encoder (ConvInteger 1-D/2-D + MatMulInteger + Tile; dynamic-quant

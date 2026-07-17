@@ -40,6 +40,8 @@ def main():
                 if "channel" in dl:
                     # RGB by default; diffusion latents are 4-channel.
                     return 4 if "latent" in inp.name.lower() else 3
+                if "feature" in dl or "mel" in dl:
+                    return 80  # mel-bin count (whisper-style encoders)
                 if any(t in dl for t in ("height", "width", "frame", "seq",
                                          "time", "len")):
                     return seq
@@ -65,6 +67,8 @@ def main():
         elif "elo" in inp.name.lower():  # rating conditioning (maia-style)
             it = np.int32 if inp.type == "tensor(int32)" else np.int64
             feed[inp.name] = np.full(dims, 1500, dtype=it)
+        elif inp.type == "tensor(bool)":  # branch flags (merged decoders)
+            feed[inp.name] = np.zeros(dims, dtype=bool)
         elif inp.type == "tensor(uint8)":  # raw image bytes
             n = int(np.prod(dims))
             feed[inp.name] = ((np.arange(n) * 37) % 256).reshape(dims).astype(
