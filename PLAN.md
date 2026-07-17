@@ -23,7 +23,10 @@
 > truncates toward zero (was rounding — off-by-one on length arithmetic);
 > Cast(FLOAT16) rounds through half precision. New verified: nemotron-int4,
 > CosyVoice3 speech tokenizer (exact); zerank-int4 documented as fp16-compute
-> export (README). Numbers in `BENCHMARKS.md`;
+> export (README). v0.3.1 published to pub.dev. NLLB decoder +
+> decoder_with_past (KV cache) and TrOCR encoder/decoder all cosine-1.0
+> (new ops: Trilu, ScatterND; external-data Constant attributes resolve).
+> Numbers in `BENCHMARKS.md`;
 > per-op ORT parity fixtures in `test/fixtures/` (`tool/gen_fixtures.py`),
 > live-model parity via `tool/live_parity.py|dart`.
 
