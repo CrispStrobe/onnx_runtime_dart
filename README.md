@@ -36,7 +36,10 @@ TF-converted preprocessing `Loop`, backbone, and the per-class NMS
 while-loop (`TopK` + `NonZero` + `NonMaxSuppression`) — with **all four
 detection outputs bit-identical to ORT**; **Ultraface** face detection,
 **fast-neural-style candy** (InstanceNorm + `Upsample`),
-**sub-pixel CNN super-resolution** and **emotion-ferplus**. Also verified: the **CosyVoice3 speech tokenizer**
+**sub-pixel CNN super-resolution** and **emotion-ferplus**; the
+**Segment-Anything (SAM ViT-H) mask decoder** (all three outputs cosine-1.0)
+and the **TAESD tiny Stable-Diffusion VAE decoder** (latent [1,4,64,64] ->
+512x512 image, max|d|=9e-6). Also verified: the **CosyVoice3 speech tokenizer**
 (all 25 discrete speech tokens exactly equal to ORT's) and the
 **llama-nemotron-rerank-1B int4** reranker (logit within 1.7e-5).
 
@@ -131,12 +134,14 @@ self-contained, runnable graph built with the protobuf types.
   `Cast`, `Constant`, `ConstantOfShape`.
 - **Reduce / linalg:** `ReduceMean`, `ReduceSum`, `ReduceMax`, `ReduceMin`,
   `ReduceProd`, `CumSum`, `Softmax`, `LayerNormalization`, `MatMul`, `Gemm`,
-  `Einsum` (`bhi,oi->bho`, `bid,bjd->bij`).
+  `Einsum` (general 1/2-operand equations without ellipsis; the transformer-
+  hot patterns keep specialized kernels), `ArgMax`, `ArgMin`.
 - **Convolution / pooling:** `Conv` (1–3 spatial dims, strides / pads /
   dilations / groups / depthwise / auto_pad, im2col+GEMM fast path),
   `ConvTranspose`, `MaxPool`, `AveragePool`, `GlobalAveragePool`,
-  `GlobalMaxPool`, `BatchNormalization`, `InstanceNormalization`, `Resize`
-  (nearest + linear), `Flatten`.
+  `GlobalMaxPool`, `BatchNormalization`, `InstanceNormalization`, `GroupNormalization`,
+  `Resize` (nearest + linear), `GridSample` (bilinear/nearest,
+  zeros/border/reflection), `RoiAlign` (avg/max), `Flatten`.
 - **Activations:** `LeakyRelu`, `Elu`, `PRelu`, `HardSigmoid`, `HardSwish`,
   `Softplus`, `Gelu` (erf + tanh forms).
 - **Recurrent:** `LSTM` (incl. peepholes), `GRU` (incl. linear_before_reset),

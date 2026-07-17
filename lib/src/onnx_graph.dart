@@ -830,7 +830,10 @@ class OnnxGraphExecutor {
           )
         ];
       case 'Einsum':
-        return [ops.opEinsum(attrs.getString('equation')!, need(0), need(1))];
+        return [
+          ops.opEinsum(attrs.getString('equation')!,
+              [for (final t in ins) t!])
+        ];
       // --- extended op set ---
       case 'Constant':
         return [attrs.constantTensor()];
@@ -1012,6 +1015,38 @@ class OnnxGraphExecutor {
         return [
           nn.opBatchNormalization(need(0), need(1), need(2), need(3), need(4),
               attrs.getFloat('epsilon') ?? 1e-5)
+        ];
+      case 'GroupNormalization':
+        return [
+          nn.opGroupNormalization(need(0), need(1), need(2),
+              attrs.getInt('num_groups')!, attrs.getFloat('epsilon') ?? 1e-5)
+        ];
+      case 'GridSample':
+        return [
+          nn.opGridSample(need(0), need(1),
+              mode: attrs.getString('mode') ?? 'linear',
+              paddingMode: attrs.getString('padding_mode') ?? 'zeros',
+              alignCorners: (attrs.getInt('align_corners') ?? 0) != 0)
+        ];
+      case 'RoiAlign':
+        return [
+          nn.opRoiAlign(need(0), need(1), need(2),
+              outH: attrs.getInt('output_height') ?? 1,
+              outW: attrs.getInt('output_width') ?? 1,
+              spatialScale: attrs.getFloat('spatial_scale') ?? 1.0,
+              samplingRatio: attrs.getInt('sampling_ratio') ?? 0,
+              isMax: attrs.getString('mode') == 'max',
+              halfPixel: (attrs.getString('coordinate_transformation_mode') ??
+                      'half_pixel') ==
+                  'half_pixel')
+        ];
+      case 'ArgMax':
+      case 'ArgMin':
+        return [
+          ops.opArgMinMax(need(0), attrs.getInt('axis') ?? 0,
+              (attrs.getInt('keepdims') ?? 1) != 0,
+              isMax: node.opType == 'ArgMax',
+              selectLastIndex: (attrs.getInt('select_last_index') ?? 0) != 0)
         ];
       case 'InstanceNormalization':
         return [

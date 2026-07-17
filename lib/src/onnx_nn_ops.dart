@@ -640,6 +640,189 @@ Tensor opInstanceNormalization(
   return Tensor.float(out, x.shape);
 }
 
+/// `GroupNormalization` (opset 18+): mean/variance per (batch, group), then
+/// per-channel scale and bias.
+Tensor opGroupNormalization(
+    Tensor x, Tensor scale, Tensor bias, int numGroups, double epsilon) {
+  final n = x.shape[0], c = x.shape[1];
+  final spN = _prod(x.shape.sublist(2));
+  final cPerGroup = c ~/ numGroups;
+  final groupLen = cPerGroup * spN;
+  final sf = scale.asFloatList(), bf = bias.asFloatList();
+  final xf = x.asFloatList();
+  final out = Float32List(xf.length);
+  for (int img = 0; img < n; img++) {
+    for (int g = 0; g < numGroups; g++) {
+      final base = (img * c + g * cPerGroup) * spN;
+      double sum = 0;
+      for (int k = 0; k < groupLen; k++) {
+        sum += xf[base + k];
+      }
+      final mean = sum / groupLen;
+      double sq = 0;
+      for (int k = 0; k < groupLen; k++) {
+        final d = xf[base + k] - mean;
+        sq += d * d;
+      }
+      final inv = 1.0 / math.sqrt(sq / groupLen + epsilon);
+      for (int cc = 0; cc < cPerGroup; cc++) {
+        final ch = g * cPerGroup + cc;
+        final cBase = base + cc * spN;
+        final a = sf[ch] * inv;
+        final b = bf[ch] - mean * a;
+        for (int k = 0; k < spN; k++) {
+          out[cBase + k] = xf[cBase + k] * a + b;
+        }
+      }
+    }
+  }
+  return Tensor.float(out, x.shape);
+}
+
+/// `GridSample` (2-D): samples [x] `[N,C,H,W]` at normalized grid
+/// coordinates `[N,Ho,Wo,2]` (x then y in [-1, 1]). Bilinear or nearest,
+/// zeros / border / reflection padding.
+Tensor opGridSample(Tensor x, Tensor grid,
+    {String mode = 'linear',
+    String paddingMode = 'zeros',
+    bool alignCorners = false}) {
+  assert(x.rank == 4 && grid.rank == 4, 'GridSample implemented for 2-D');
+  final n = x.shape[0], c = x.shape[1], h = x.shape[2], w = x.shape[3];
+  final ho = grid.shape[1], wo = grid.shape[2];
+  final xf = x.asFloatList(), gf = grid.asFloatList();
+  final out = Float32List(n * c * ho * wo);
+
+  double unnormalize(double v, int size) => alignCorners
+      ? (v + 1) / 2 * (size - 1)
+      : ((v + 1) * size - 1) / 2;
+
+  double reflect(double v, int size) {
+    if (size == 1) return 0;
+    final span = alignCorners ? 2.0 * (size - 1) : 2.0 * size;
+    final low = alignCorners ? 0.0 : -0.5;
+    var t = (v - low) % span;
+    if (t < 0) t += span;
+    if (t > span / 2) t = span - t;
+    return t + low;
+  }
+
+  double sampleAt(int b, int ch, double sy, double sx) {
+    if (paddingMode == 'reflection') {
+      sy = reflect(sy, h);
+      sx = reflect(sx, w);
+    }
+    double pixel(int iy, int ix) {
+      if (paddingMode == 'border' || paddingMode == 'reflection') {
+        iy = iy.clamp(0, h - 1);
+        ix = ix.clamp(0, w - 1);
+      } else if (iy < 0 || iy >= h || ix < 0 || ix >= w) {
+        return 0; // zeros padding
+      }
+      return xf[((b * c + ch) * h + iy) * w + ix];
+    }
+
+    if (mode == 'nearest') {
+      return pixel(sy.round(), sx.round());
+    }
+    final y0 = sy.floor(), x0 = sx.floor();
+    final fy = sy - y0, fx = sx - x0;
+    return pixel(y0, x0) * (1 - fy) * (1 - fx) +
+        pixel(y0, x0 + 1) * (1 - fy) * fx +
+        pixel(y0 + 1, x0) * fy * (1 - fx) +
+        pixel(y0 + 1, x0 + 1) * fy * fx;
+  }
+
+  for (int b = 0; b < n; b++) {
+    for (int oy = 0; oy < ho; oy++) {
+      for (int ox = 0; ox < wo; ox++) {
+        final g = ((b * ho + oy) * wo + ox) * 2;
+        final sx = unnormalize(gf[g], w);
+        final sy = unnormalize(gf[g + 1], h);
+        for (int ch = 0; ch < c; ch++) {
+          out[((b * c + ch) * ho + oy) * wo + ox] = sampleAt(b, ch, sy, sx);
+        }
+      }
+    }
+  }
+  return Tensor.float(out, [n, c, ho, wo]);
+}
+
+/// `RoiAlign` (2-D, average or max): pools each ROI `[x1,y1,x2,y2]` (input
+/// coordinate scale via [spatialScale]) into `[outH, outW]` bins with
+/// bilinear sampling; `half_pixel` subtracts 0.5 after scaling.
+Tensor opRoiAlign(Tensor x, Tensor rois, Tensor batchIndices,
+    {required int outH,
+    required int outW,
+    double spatialScale = 1.0,
+    int samplingRatio = 0,
+    bool isMax = false,
+    bool halfPixel = true}) {
+  final c = x.shape[1], h = x.shape[2], w = x.shape[3];
+  final nRoi = rois.shape[0];
+  final xf = x.asFloatList(), rf = rois.asFloatList();
+  final bi = batchIndices.asIntList();
+  final out = Float32List(nRoi * c * outH * outW);
+  final offset = halfPixel ? 0.5 : 0.0;
+
+  // Max mode is NOT max-of-interpolated-values: the ONNX reference (and
+  // ORT) take the max over the four weighted corner products per sample.
+  double bilinear(int b, int ch, double sy, double sx, bool wantMax) {
+    if (sy < -1 || sy > h || sx < -1 || sx > w) return 0;
+    sy = sy.clamp(0.0, h - 1.0);
+    sx = sx.clamp(0.0, w - 1.0);
+    final y0 = sy.floor(), x0 = sx.floor();
+    final y1 = math.min(y0 + 1, h - 1), x1 = math.min(x0 + 1, w - 1);
+    final fy = sy - y0, fx = sx - x0;
+    final base = (b * c + ch) * h * w;
+    final p11 = xf[base + y0 * w + x0] * (1 - fy) * (1 - fx);
+    final p12 = xf[base + y0 * w + x1] * (1 - fy) * fx;
+    final p21 = xf[base + y1 * w + x0] * fy * (1 - fx);
+    final p22 = xf[base + y1 * w + x1] * fy * fx;
+    return wantMax
+        ? math.max(math.max(p11, p12), math.max(p21, p22))
+        : p11 + p12 + p21 + p22;
+  }
+
+  for (int r = 0; r < nRoi; r++) {
+    final b = bi[r];
+    final x1 = rf[r * 4] * spatialScale - offset;
+    final y1 = rf[r * 4 + 1] * spatialScale - offset;
+    final x2 = rf[r * 4 + 2] * spatialScale - offset;
+    final y2 = rf[r * 4 + 3] * spatialScale - offset;
+    var roiH = y2 - y1, roiW = x2 - x1;
+    if (!halfPixel) {
+      roiH = math.max(roiH, 1);
+      roiW = math.max(roiW, 1);
+    }
+    final binH = roiH / outH, binW = roiW / outW;
+    final gridH = samplingRatio > 0 ? samplingRatio : (roiH / outH).ceil();
+    final gridW = samplingRatio > 0 ? samplingRatio : (roiW / outW).ceil();
+    final gH = math.max(gridH, 1), gW = math.max(gridW, 1);
+    for (int ch = 0; ch < c; ch++) {
+      for (int oy = 0; oy < outH; oy++) {
+        for (int ox = 0; ox < outW; ox++) {
+          double acc = isMax ? double.negativeInfinity : 0;
+          for (int iy = 0; iy < gH; iy++) {
+            final sy = y1 + oy * binH + (iy + 0.5) * binH / gH;
+            for (int ix = 0; ix < gW; ix++) {
+              final sx = x1 + ox * binW + (ix + 0.5) * binW / gW;
+              final v = bilinear(b, ch, sy, sx, isMax);
+              if (isMax) {
+                acc = math.max(acc, v);
+              } else {
+                acc += v;
+              }
+            }
+          }
+          out[((r * c + ch) * outH + oy) * outW + ox] =
+              isMax ? acc : acc / (gH * gW);
+        }
+      }
+    }
+  }
+  return Tensor.float(out, [nRoi, c, outH, outW]);
+}
+
 // ---------------------------------------------------------------------------
 // Resize
 // ---------------------------------------------------------------------------

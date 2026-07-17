@@ -1311,15 +1311,107 @@ Tensor opGemm(Tensor a, Tensor b, Tensor? c,
 // (a general einsum parser isn't needed for two known patterns).
 // ---------------------------------------------------------------------------
 
-Tensor opEinsum(String equation, Tensor a, Tensor b) {
-  switch (equation) {
-    case 'bhi,oi->bho':
-      return _einsumBhiOi(a, b);
-    case 'bid,bjd->bij':
-      return _einsumBidBjd(a, b);
-    default:
-      throw UnsupportedError('Einsum equation "$equation" not implemented');
+/// General einsum over one or two operands (explicit labels; `...` is not
+/// supported). The two transformer-hot equations keep their specialized
+/// kernels; everything else runs the direct sum-of-products definition.
+Tensor opEinsum(String equation, List<Tensor> inputs) {
+  final eq = equation.replaceAll(' ', '');
+  if (inputs.length == 2) {
+    switch (eq) {
+      case 'bhi,oi->bho':
+        return _einsumBhiOi(inputs[0], inputs[1]);
+      case 'bid,bjd->bij':
+        return _einsumBidBjd(inputs[0], inputs[1]);
+    }
   }
+  if (eq.contains('...')) {
+    throw UnsupportedError('Einsum: ellipsis not supported ("$equation")');
+  }
+  final arrowSplit = eq.split('->');
+  final terms = arrowSplit[0].split(',');
+  if (terms.length != inputs.length || inputs.length > 2) {
+    throw UnsupportedError('Einsum: ${inputs.length} inputs vs '
+        '${terms.length} terms in "$equation" (max 2 supported)');
+  }
+
+  // Label -> dimension size, checked for consistency across operands.
+  final sizeOf = <String, int>{};
+  final counts = <String, int>{};
+  for (int t = 0; t < terms.length; t++) {
+    if (terms[t].length != inputs[t].rank) {
+      throw ArgumentError('Einsum term "${terms[t]}" vs rank '
+          '${inputs[t].rank} operand');
+    }
+    for (int a = 0; a < terms[t].length; a++) {
+      final l = terms[t][a];
+      final d = inputs[t].shape[a];
+      final prev = sizeOf[l];
+      if (prev != null && prev != d && prev != 1 && d != 1) {
+        throw ArgumentError('Einsum label "$l" size mismatch: $prev vs $d');
+      }
+      sizeOf[l] = math.max(prev ?? 1, d);
+      counts.update(l, (v) => v + 1, ifAbsent: () => 1);
+    }
+  }
+  final outTerm = arrowSplit.length > 1
+      ? arrowSplit[1]
+      : ([
+          for (final l in (counts.keys.toList()..sort()))
+            if (counts[l] == 1) l
+        ].join());
+  final sumLabels = [
+    for (final l in sizeOf.keys)
+      if (!outTerm.contains(l)) l
+  ]..sort();
+
+  // Global coordinate order: output labels then contraction labels.
+  final order = [...outTerm.split(''), ...sumLabels];
+  final pos = {for (int i = 0; i < order.length; i++) order[i]: i};
+  // Per input: stride contribution of each global coordinate (0 when the
+  // operand broadcasts along that label).
+  final contribs = <List<int>>[];
+  for (int t = 0; t < terms.length; t++) {
+    final c = List<int>.filled(order.length, 0);
+    final strides = inputs[t].strides;
+    for (int a = 0; a < terms[t].length; a++) {
+      if (inputs[t].shape[a] != 1) c[pos[terms[t][a]]!] += strides[a];
+    }
+    contribs.add(c);
+  }
+
+  final outShape = [for (final l in outTerm.split('')) sizeOf[l]!];
+  final outN = outShape.fold<int>(1, (a, b) => a * b);
+  final sumShape = [for (final l in sumLabels) sizeOf[l]!];
+  final sumN = sumShape.fold<int>(1, (a, b) => a * b);
+  final out = Float32List(outN);
+  final coords = List<int>.filled(order.length, 0);
+  final nOut = outTerm.length;
+
+  for (int oi = 0; oi < outN; oi++) {
+    double acc = 0;
+    for (int si = 0; si < sumN; si++) {
+      double prod = 1;
+      for (int t = 0; t < inputs.length; t++) {
+        int flat = 0;
+        final c = contribs[t];
+        for (int p = 0; p < order.length; p++) {
+          flat += coords[p] * c[p];
+        }
+        prod *= inputs[t].getD(flat);
+      }
+      acc += prod;
+      for (int p = order.length - 1; p >= nOut; p--) {
+        if (++coords[p] < sizeOf[order[p]]!) break;
+        coords[p] = 0;
+      }
+    }
+    out[oi] = acc;
+    for (int p = nOut - 1; p >= 0; p--) {
+      if (++coords[p] < outShape[p]) break;
+      coords[p] = 0;
+    }
+  }
+  return Tensor.float(out, outShape);
 }
 
 // A:[b,h,i], B:[o,i] -> out[b,h,o] = sum_i A[b,h,i]*B[o,i]  (a linear layer)
@@ -1501,6 +1593,45 @@ Tensor opWhere(Tensor cond, Tensor a, Tensor b) {
 
 /// `Size` — total element count as an int64 scalar.
 Tensor opSize(Tensor x) => Tensor.scalarInt(x.length);
+
+/// `ArgMax` / `ArgMin` along [axis]; ties resolve to the first (or, with
+/// [selectLastIndex], the last) occurrence.
+Tensor opArgMinMax(Tensor x, int axis, bool keepdims,
+    {required bool isMax, bool selectLastIndex = false}) {
+  final ax = axis < 0 ? axis + x.rank : axis;
+  final dim = x.shape[ax];
+  int outer = 1, inner = 1;
+  for (int a = 0; a < ax; a++) {
+    outer *= x.shape[a];
+  }
+  for (int a = ax + 1; a < x.rank; a++) {
+    inner *= x.shape[a];
+  }
+  final out = Int64List(outer * inner);
+  for (int o = 0; o < outer; o++) {
+    for (int i = 0; i < inner; i++) {
+      final base = o * dim * inner + i;
+      int bestIdx = 0;
+      double best = x.getD(base);
+      for (int d = 1; d < dim; d++) {
+        final v = x.getD(base + d * inner);
+        final better = isMax
+            ? (selectLastIndex ? v >= best : v > best)
+            : (selectLastIndex ? v <= best : v < best);
+        if (better) {
+          best = v;
+          bestIdx = d;
+        }
+      }
+      out[o * inner + i] = bestIdx;
+    }
+  }
+  final shape = [
+    for (int a = 0; a < x.rank; a++)
+      if (a != ax) x.shape[a] else if (keepdims) 1
+  ];
+  return Tensor.int64(out, shape);
+}
 
 /// `NonZero` — indices of nonzero elements as `[rank, count]` int64,
 /// scanning in row-major order.

@@ -274,6 +274,72 @@ def main():
     emit("hardswish",
          [helper.make_node("HardSwish", ["x"], ["out0"])],
          {"x": f32(3, 4, 5)})
+    emit("argmax_axis1", [helper.make_node("ArgMax", ["x"], ["out0"], axis=1)],
+         {"x": f32(2, 5, 3)}, opset=17)
+    emit("argmin_nokeep_last",
+         [helper.make_node("ArgMin", ["x"], ["out0"], axis=-1, keepdims=0,
+                           select_last_index=1)],
+         {"x": np.tile(f32(3, 1), (1, 4)).astype(np.float32)}, opset=17)
+    emit("einsum_matmul", [helper.make_node("Einsum", ["a", "b"], ["out0"],
+                                            equation="ij,jk->ik")],
+         {"a": f32(3, 4), "b": f32(4, 5)}, opset=17)
+    emit("einsum_batch_transpose",
+         [helper.make_node("Einsum", ["a", "b"], ["out0"],
+                           equation="bij,bkj->bik")],
+         {"a": f32(2, 3, 4), "b": f32(2, 5, 4)}, opset=17)
+    emit("einsum_outer_sum",
+         [helper.make_node("Einsum", ["a", "b"], ["out0"],
+                           equation="i,j->ij")],
+         {"a": f32(4), "b": f32(5)}, opset=17)
+    emit("einsum_trace_perm",
+         [helper.make_node("Einsum", ["a"], ["out0"], equation="ijk->kji")],
+         {"a": f32(2, 3, 4)}, opset=17)
+    emit("einsum_reduce",
+         [helper.make_node("Einsum", ["a"], ["out0"], equation="ijk->i")],
+         {"a": f32(2, 3, 4)}, opset=17)
+    emit("einsum_implicit",
+         [helper.make_node("Einsum", ["a", "b"], ["out0"],
+                           equation="ij,jk")],
+         {"a": f32(3, 4), "b": f32(4, 2)}, opset=17)
+    emit("groupnorm",
+         [helper.make_node("GroupNormalization", ["x", "s", "b"], ["out0"],
+                           num_groups=4, epsilon=1e-3)],
+         {"x": f32(2, 8, 5, 5)},
+         initializers={"s": f32(8), "b": f32(8)}, opset=21)
+    grid = (RNG.uniform(-1.2, 1.2, (1, 6, 7, 2))).astype(np.float32)
+    emit("gridsample_bilinear_zeros",
+         [helper.make_node("GridSample", ["x", "g"], ["out0"],
+                           mode="linear", padding_mode="zeros")],
+         {"x": f32(1, 2, 5, 5)}, initializers={"g": grid}, opset=20)
+    emit("gridsample_nearest_border_align",
+         [helper.make_node("GridSample", ["x", "g"], ["out0"],
+                           mode="nearest", padding_mode="border",
+                           align_corners=1)],
+         {"x": f32(1, 2, 5, 5)}, initializers={"g": grid}, opset=20)
+    emit("gridsample_reflection",
+         [helper.make_node("GridSample", ["x", "g"], ["out0"],
+                           mode="linear", padding_mode="reflection")],
+         {"x": f32(1, 2, 5, 5)}, initializers={"g": grid}, opset=20)
+    rois = np.array([[0.5, 0.5, 3.5, 3.5], [1, 1, 6, 6]], dtype=np.float32)
+    emit("roialign_avg",
+         [helper.make_node("RoiAlign", ["x", "r", "bi"], ["out0"],
+                           output_height=3, output_width=3,
+                           spatial_scale=1.0, sampling_ratio=2)],
+         {"x": f32(1, 2, 8, 8)},
+         initializers={"r": rois, "bi": np.array([0, 0], dtype=np.int64)},
+         opset=17)
+    # sampling_ratio pinned to 1: ORT warns its own max-mode averaging is
+    # wrong for other ratios (roialign.h "will be fixed in ORT 1.13"), so
+    # only the ratio where the oracle is trustworthy is fixture-tested.
+    emit("roialign_max_outhalf",
+         [helper.make_node("RoiAlign", ["x", "r", "bi"], ["out0"],
+                           output_height=2, output_width=2, mode="max",
+                           sampling_ratio=1,
+                           coordinate_transformation_mode="output_half_pixel",
+                           spatial_scale=0.5)],
+         {"x": f32(1, 2, 8, 8)},
+         initializers={"r": rois * 2, "bi": np.array([0, 0], dtype=np.int64)},
+         opset=17)
     emit("clip_attr_form",  # opset-6 Clip: min/max as attributes (Relu6)
          [helper.make_node("Clip", ["x"], ["out0"], min=0.0, max=6.0)],
          {"x": (f32(3, 7) * 5)}, opset=9)

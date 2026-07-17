@@ -38,7 +38,8 @@ def main():
             if isinstance(d, str):
                 dl = d.lower()
                 if "channel" in dl:
-                    return 3
+                    # RGB by default; diffusion latents are 4-channel.
+                    return 4 if "latent" in inp.name.lower() else 3
                 if any(t in dl for t in ("height", "width", "frame", "seq",
                                          "time", "len")):
                     return seq
@@ -48,6 +49,13 @@ def main():
         dims = [resolve(i, d) for i, d in enumerate(inp.shape)]
         if inp.name == "sr":  # sample-rate scalar (VAD-style audio models)
             feed[inp.name] = np.array(16000, dtype=np.int64)
+        elif "size" in inp.name.lower() and inp.type == "tensor(float)":
+            # image-size vectors (SAM's orig_im_size): plausible dimensions
+            feed[inp.name] = np.full(dims, 512, dtype=np.float32)
+        elif "label" in inp.name.lower() and inp.type == "tensor(float)":
+            n = int(np.prod(dims))
+            feed[inp.name] = (np.arange(n) % 2).reshape(dims).astype(
+                np.float32)
         elif ("state" in inp.name or "hidden" in inp.name
               or inp.name in ("h0", "c0")):
             feed[inp.name] = np.zeros(dims, np.float32)
