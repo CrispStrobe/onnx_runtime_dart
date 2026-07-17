@@ -618,37 +618,11 @@ Tensor opBatchNormalization(Tensor x, Tensor scale, Tensor bias, Tensor mean,
   return Tensor.float(out, x.shape);
 }
 
-/// `InstanceNormalization`: mean/variance computed over each (n, c) instance's
-/// spatial dims, then per-channel scale + bias.
+/// `InstanceNormalization`: GroupNormalization with one group per channel
+/// (mean/variance over each (n, c) instance's spatial dims).
 Tensor opInstanceNormalization(
-    Tensor x, Tensor scale, Tensor bias, double epsilon) {
-  final n = x.shape[0], c = x.shape[1];
-  final spN = _prod(x.shape.sublist(2));
-  final sf = scale.asFloatList(), bf = bias.asFloatList();
-  final xf = x.asFloatList();
-  final out = Float32List(xf.length);
-  for (int img = 0; img < n; img++) {
-    for (int ch = 0; ch < c; ch++) {
-      final base = (img * c + ch) * spN;
-      double sum = 0;
-      for (int k = 0; k < spN; k++) {
-        sum += xf[base + k];
-      }
-      final mean = sum / spN;
-      double sq = 0;
-      for (int k = 0; k < spN; k++) {
-        final d = xf[base + k] - mean;
-        sq += d * d;
-      }
-      final inv = sf[ch] / math.sqrt(sq / spN + epsilon);
-      final off = bf[ch] - mean * inv;
-      for (int k = 0; k < spN; k++) {
-        out[base + k] = xf[base + k] * inv + off;
-      }
-    }
-  }
-  return Tensor.float(out, x.shape);
-}
+        Tensor x, Tensor scale, Tensor bias, double epsilon) =>
+    opGroupNormalization(x, scale, bias, x.shape[1], epsilon);
 
 /// `GroupNormalization` (opset 18+): mean/variance per (batch, group), then
 /// per-channel scale and bias.
@@ -729,41 +703,52 @@ Tensor opGridSample(Tensor x, Tensor grid,
     return t + low;
   }
 
-  double sampleAt(int b, int ch, double sy, double sx) {
-    if (paddingMode == 'reflection') {
-      sy = reflect(sy, h);
-      sx = reflect(sx, w);
+  // Per-pixel geometry (padding transform, corner indices, weights) is
+  // channel-invariant — compute it once, then loop channels with cheap
+  // gathers. -1 flat offsets mark zero-padded taps.
+  int flatOrPad(int iy, int ix) {
+    if (paddingMode == 'border' || paddingMode == 'reflection') {
+      iy = iy.clamp(0, h - 1);
+      ix = ix.clamp(0, w - 1);
+    } else if (iy < 0 || iy >= h || ix < 0 || ix >= w) {
+      return -1; // zeros padding
     }
-    double pixel(int iy, int ix) {
-      if (paddingMode == 'border' || paddingMode == 'reflection') {
-        iy = iy.clamp(0, h - 1);
-        ix = ix.clamp(0, w - 1);
-      } else if (iy < 0 || iy >= h || ix < 0 || ix >= w) {
-        return 0; // zeros padding
-      }
-      return xf[((b * c + ch) * h + iy) * w + ix];
-    }
-
-    if (mode == 'nearest') {
-      // Round half to even, matching ORT's nearbyint.
-      return pixel(_roundEvenNn(sy), _roundEvenNn(sx));
-    }
-    final y0 = sy.floor(), x0 = sx.floor();
-    final fy = sy - y0, fx = sx - x0;
-    return pixel(y0, x0) * (1 - fy) * (1 - fx) +
-        pixel(y0, x0 + 1) * (1 - fy) * fx +
-        pixel(y0 + 1, x0) * fy * (1 - fx) +
-        pixel(y0 + 1, x0 + 1) * fy * fx;
+    return iy * w + ix;
   }
 
+  final planeSize = h * w;
   for (int b = 0; b < n; b++) {
     for (int oy = 0; oy < ho; oy++) {
       for (int ox = 0; ox < wo; ox++) {
         final g = ((b * ho + oy) * wo + ox) * 2;
-        final sx = unnormalize(gf[g], w);
-        final sy = unnormalize(gf[g + 1], h);
+        var sx = unnormalize(gf[g], w);
+        var sy = unnormalize(gf[g + 1], h);
+        if (paddingMode == 'reflection') {
+          sy = reflect(sy, h);
+          sx = reflect(sx, w);
+        }
+        final outIdx = (b * c * ho + oy) * wo + ox;
+        if (mode == 'nearest') {
+          final off = flatOrPad(_roundEvenNn(sy), _roundEvenNn(sx));
+          for (int ch = 0; ch < c; ch++) {
+            final base = (b * c + ch) * planeSize;
+            out[outIdx + ch * ho * wo] = off < 0 ? 0 : xf[base + off];
+          }
+          continue;
+        }
+        final y0 = sy.floor(), x0 = sx.floor();
+        final fy = sy - y0, fx = sx - x0;
+        final o11 = flatOrPad(y0, x0), o12 = flatOrPad(y0, x0 + 1);
+        final o21 = flatOrPad(y0 + 1, x0), o22 = flatOrPad(y0 + 1, x0 + 1);
+        final w11 = (1 - fy) * (1 - fx), w12 = (1 - fy) * fx;
+        final w21 = fy * (1 - fx), w22 = fy * fx;
         for (int ch = 0; ch < c; ch++) {
-          out[((b * c + ch) * ho + oy) * wo + ox] = sampleAt(b, ch, sy, sx);
+          final base = (b * c + ch) * planeSize;
+          out[outIdx + ch * ho * wo] =
+              (o11 < 0 ? 0 : xf[base + o11] * w11) +
+                  (o12 < 0 ? 0 : xf[base + o12] * w12) +
+                  (o21 < 0 ? 0 : xf[base + o21] * w21) +
+                  (o22 < 0 ? 0 : xf[base + o22] * w22);
         }
       }
     }

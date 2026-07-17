@@ -385,8 +385,37 @@ class OnnxGraphExecutor {
   ///
   /// Pass a [profile] to accumulate per-op-type wall time across the run
   /// (adds one Stopwatch read per node — negligible next to the op work).
+  /// Validates provided inputs against the graph's declared signatures:
+  /// missing required inputs and fixed-dimension mismatches fail loudly here
+  /// instead of producing silently wrong numbers downstream (batch-fixed
+  /// exports are a real hazard — ORT rejects such feeds too).
+  void _validateInputs(Map<String, Tensor> inputs) {
+    for (final vi in _graph.input) {
+      final t = inputs[vi.name];
+      if (t == null) {
+        if (_initializers.containsKey(vi.name)) continue; // default present
+        throw ArgumentError('Missing required input "${vi.name}"');
+      }
+      final dims = vi.type.tensorType.shape.dim;
+      if (dims.isEmpty) continue; // no declared shape
+      if (dims.length != t.rank) {
+        throw ArgumentError('Input "${vi.name}": rank ${t.rank} provided, '
+            'model declares rank ${dims.length}');
+      }
+      for (int i = 0; i < dims.length; i++) {
+        final want = dims[i].dimValue.toInt();
+        if (want > 0 && want != t.shape[i]) {
+          throw ArgumentError('Input "${vi.name}": dim $i is ${t.shape[i]}, '
+              'model declares fixed size $want — this export does not '
+              'support that shape');
+        }
+      }
+    }
+  }
+
   Map<String, Tensor> run(Map<String, Tensor> inputs, List<String> outputNames,
       {ExecutionProfile? profile}) {
+    _validateInputs(inputs);
     final values = <String, Tensor>{..._initializers, ...inputs};
     _execNodes(_nodes, values, profile);
     // Debug escape hatch: ['*'] returns every value produced (note that
@@ -458,6 +487,7 @@ class OnnxGraphExecutor {
   Future<Map<String, Tensor>> runAsync(
       Map<String, Tensor> inputs, List<String> outputNames,
       {ExecutionProfile? profile}) async {
+    _validateInputs(inputs);
     final values = <String, Tensor>{..._initializers, ...inputs};
     final sw = profile == null ? null : Stopwatch();
     final pool = _pool;

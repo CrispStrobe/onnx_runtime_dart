@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.3.3
+
+- **Correctness (from an adversarial multi-agent review of 0.3.2):**
+  - RMSNorm fusion: gamma now broadcasts along the last axis exactly as the
+    unfused chain does (0.3.2 could silently mis-apply it when the reduce
+    axis wasn't the last axis), with an explicit length check.
+  - The fusion pass protects names captured by `Loop`/`If`/`Scan` body
+    subgraphs (previously it could fuse away an intermediate a subgraph
+    reads).
+  - `RoiAlign` defaults to `output_half_pixel` for opset < 16 models;
+    `GroupNormalization` accepts the deprecated per-group scale/bias form;
+    `Einsum` rejects repeated output labels and keeps integer dtypes;
+    `GridSample` throws on cubic modes / non-4-D inputs and rounds nearest
+    ties half-to-even like ORT.
+- **Input validation:** `run`/`runAsync` verify provided inputs against the
+  graph's declared signatures — missing inputs and fixed-dimension
+  mismatches (e.g. feeding a batch to a batch-fixed export) now throw
+  `ArgumentError` instead of computing silently wrong results.
+- Cleanups: `InstanceNormalization` delegates to `GroupNormalization`;
+  `GridSample` hoists per-pixel geometry out of the channel loop.
+
 ## 0.3.2
 
 - **Correctness:** `Clip` with min/max as attributes (opset 6–10, e.g. every
