@@ -247,6 +247,8 @@ def main():
         emit(name, [helper.make_node("Resize", ins, ["out0"], **attrs)],
              {"x": x}, initializers=inits)
 
+    resize("resize_1d_linear", f32(1, 3, 12), scales=[1, 1, 2],
+           mode="linear", coordinate_transformation_mode="align_corners")
     resize("resize_nearest_up", f32(1, 2, 4, 4), scales=[1, 1, 2, 2],
            mode="nearest")
     resize("resize_nearest_asym_floor", f32(1, 2, 4, 4), scales=[1, 1, 2, 2],
@@ -452,6 +454,13 @@ def main():
           helper.make_node("Round", ["x"], ["r"]),
           helper.make_node("Concat", ["f", "c", "r"], ["out0"], axis=0)],
          {"x": (f32(2, 6) * 3)})
+    emit("reshape_zero_and_neg1",  # 0-copy dims + -1 inference together
+         [helper.make_node("Reshape", ["x", "shp"], ["out0"])],
+         {"x": f32(48, 1, 2, 256)},
+         initializers={"shp": np.array([0, 0, -1], dtype=np.int64)})
+    emit("atan",
+         [helper.make_node("Atan", ["x"], ["out0"])],
+         {"x": (f32(3, 7) * 4)})
     emit("sign_float_int",
          [helper.make_node("Sign", ["x"], ["f"]),
           helper.make_node("Sign", ["xi"], ["i_"]),

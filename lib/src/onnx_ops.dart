@@ -340,37 +340,46 @@ Tensor _elementwiseBinary(
     return Tensor.float(out, b.shape);
   }
 
-  // General broadcasting path (reuses a single mutable coordinate buffer
-  // instead of allocating a fresh List<int> per output element).
+  // General broadcasting path: incremental odometer with per-axis source
+  // strides (stride 0 on broadcast axes) — no per-element coordinate
+  // decomposition.
   final outShape = _broadcastShape(a.shape, b.shape);
   final n = outShape.fold<int>(1, (x, y) => x * y);
-  final coords = List<int>.filled(outShape.length, 0);
-
-  double runOne() {
-    final av = a.getD(_flattenBroadcast(coords, a.shape));
-    final bv = b.getD(_flattenBroadcast(coords, b.shape));
-    return op(av, bv);
+  final rank = outShape.length;
+  final aStridesFull = List<int>.filled(rank, 0);
+  final bStridesFull = List<int>.filled(rank, 0);
+  final aStrides = a.strides, bStrides = b.strides;
+  for (int k = 0; k < a.rank; k++) {
+    if (a.shape[k] != 1) aStridesFull[k + rank - a.rank] = aStrides[k];
   }
+  for (int k = 0; k < b.rank; k++) {
+    if (b.shape[k] != 1) bStridesFull[k + rank - b.rank] = bStrides[k];
+  }
+  final coords = List<int>.filled(rank, 0);
+  int aOff = 0, bOff = 0;
 
   void advance() {
-    for (int k = outShape.length - 1; k >= 0; k--) {
-      coords[k]++;
-      if (coords[k] < outShape[k]) return;
+    for (int k = rank - 1; k >= 0; k--) {
+      aOff += aStridesFull[k];
+      bOff += bStridesFull[k];
+      if (++coords[k] < outShape[k]) return;
       coords[k] = 0;
+      aOff -= outShape[k] * aStridesFull[k];
+      bOff -= outShape[k] * bStridesFull[k];
     }
   }
 
   if (bothInt) {
     final out = Int64List(n);
     for (int idx = 0; idx < n; idx++) {
-      out[idx] = runOne().round();
+      out[idx] = op(a.getD(aOff), b.getD(bOff)).round();
       advance();
     }
     return Tensor.int64(out, outShape);
   }
   final out = Float32List(n);
   for (int idx = 0; idx < n; idx++) {
-    out[idx] = runOne();
+    out[idx] = op(a.getD(aOff), b.getD(bOff));
     advance();
   }
   return Tensor.float(out, outShape);
@@ -478,6 +487,7 @@ Tensor opHardSwish(Tensor a) =>
     _elementwiseUnary(a, (x) => x * (x / 6 + 0.5).clamp(0.0, 1.0));
 Tensor opSoftplus(Tensor a) =>
     _elementwiseUnary(a, (x) => math.log(1 + math.exp(x)));
+Tensor opAtan(Tensor a) => _elementwiseUnary(a, math.atan);
 Tensor opSign(Tensor a) => a.isFloat
     ? _elementwiseUnary(a, (x) => x > 0 ? 1.0 : (x < 0 ? -1.0 : 0.0))
     : _unaryInt(a, (x) => x > 0 ? 1 : (x < 0 ? -1 : 0));
@@ -2235,6 +2245,11 @@ Tensor opCumSum(Tensor x, int axis,
   final isFloat = x.isFloat;
   final outF = isFloat ? Float32List(n) : null;
   final outI = isFloat ? null : Int64List(n);
+  // Float accumulation rounds to float32 at every step, matching ORT —
+  // long cumulative sums (e.g. vocoder phase over tens of thousands of
+  // samples) otherwise drift from the oracle and chaos-amplify through
+  // sin() downstream.
+  final f32 = Float32List(1);
   for (int i = 0; i < n; i++) {
     if ((i ~/ axisStride) % axisSize != 0) continue; // only line starts
     var accF = 0.0;
@@ -2249,11 +2264,11 @@ Tensor opCumSum(Tensor x, int axis,
         } else {
           outI![idx] = accI;
         }
-        accF += v;
-        accI += v.round();
-      } else {
-        accF += v;
-        accI += v.round();
+      }
+      f32[0] = accF + v;
+      accF = f32[0];
+      accI += v.round();
+      if (!exclusive) {
         if (isFloat) {
           outF![idx] = accF;
         } else {

@@ -179,6 +179,41 @@ void main() {
     }
   });
 
+  test('pooled 1-D conv fan-out == sync, bitwise', () async {
+    final g = GraphProto()
+      ..input.add(ValueInfoProto()..name = 'X')
+      ..output.add(ValueInfoProto()..name = 'Y')
+      ..initializer.add(_floatInit('W', [8, 4, 5]))
+      ..node.add(NodeProto()
+        ..opType = 'Conv'
+        ..input.addAll(['X', 'W'])
+        ..output.add('Y')
+        ..attribute.addAll([
+          AttributeProto()
+            ..name = 'pads'
+            ..ints.addAll([Int64(2), Int64(2)]),
+          AttributeProto()
+            ..name = 'dilations'
+            ..ints.add(Int64(2)),
+        ]));
+    final model =
+        OnnxModel.fromBytes((ModelProto()..graph = g).writeToBuffer());
+    final x = Tensor.float(
+        Float32List.fromList(
+            List.generate(4 * 240, (_) => _rng.nextDouble() * 2 - 1)),
+        [1, 4, 240]);
+    final want = model.run({'X': x}, ['Y'])['Y']!;
+    await model.parallelize(workers: 3, poolConv: true);
+    try {
+      final got = (await model.runAsync({'X': x}, ['Y']))['Y']!;
+      expect(got.shape, want.shape);
+      expect(got.asFloatList(), want.asFloatList(),
+          reason: 'pooled 1-D conv must be bitwise-identical');
+    } finally {
+      model.dispose();
+    }
+  });
+
   test('runAsync without parallelize matches run', () async {
     final g = GraphProto()
       ..input.add(ValueInfoProto()..name = 'X')

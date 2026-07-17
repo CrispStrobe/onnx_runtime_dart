@@ -138,15 +138,18 @@ class Tensor {
 
   Tensor reshape(List<int> newShape) {
     final resolved = List<int>.from(newShape);
+    // ONNX Reshape: 0 copies the dim from the input shape at that position.
+    // Zeros MUST resolve before -1 inference — with a target like [0, 0, -1]
+    // the copied dims are part of the known product (inferring first made
+    // -1 swallow the whole length).
+    for (int k = 0; k < resolved.length; k++) {
+      if (resolved[k] == 0 && k < shape.length) resolved[k] = shape[k];
+    }
     final negIdx = resolved.indexOf(-1);
     if (negIdx != -1) {
       final knownProduct =
           resolved.where((d) => d != -1).fold<int>(1, (a, b) => a * b);
       resolved[negIdx] = length ~/ (knownProduct == 0 ? 1 : knownProduct);
-    }
-    // ONNX Reshape allows 0 to mean "copy dim from input shape at that position"
-    for (int k = 0; k < resolved.length; k++) {
-      if (resolved[k] == 0 && k < shape.length) resolved[k] = shape[k];
     }
     return switch (dtype) {
       DType.float32 => Tensor.float(f!, resolved),

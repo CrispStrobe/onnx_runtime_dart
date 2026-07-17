@@ -23,6 +23,7 @@ def tensor_json(a: np.ndarray) -> dict:
 def main():
     model_path, out_path = sys.argv[1], sys.argv[2]
     seq = int(sys.argv[3]) if len(sys.argv) > 3 else 32
+    vocab = int(sys.argv[4]) if len(sys.argv) > 4 else 0  # cap token ids
     sess = ort.InferenceSession(model_path, providers=["CPUExecutionProvider"])
 
     feed = {}
@@ -51,6 +52,8 @@ def main():
         dims = [resolve(i, d) for i, d in enumerate(inp.shape)]
         if inp.name == "sr":  # sample-rate scalar (VAD-style audio models)
             feed[inp.name] = np.array(16000, dtype=np.int64)
+        elif inp.name == "speed" and inp.type == "tensor(float)":
+            feed[inp.name] = np.ones(dims, dtype=np.float32)
         elif "size" in inp.name.lower() and inp.type == "tensor(float)":
             # image-size vectors (SAM's orig_im_size): plausible dimensions
             feed[inp.name] = np.full(dims, 512, dtype=np.float32)
@@ -85,6 +88,11 @@ def main():
                 v = np.zeros(dims, np.int64)
             elif "position" in inp.name:
                 v = (np.arange(n) % seq).reshape(dims).astype(np.int64)
+            elif vocab:
+                # Small-vocab models (phoneme TTS etc.): cap ids, pad-frame.
+                v = (1 + (np.arange(n) * 7) % (vocab - 1)).reshape(dims)
+                v.ravel()[0] = 0
+                v.ravel()[-1] = 0
             else:
                 v = (1000 + (np.arange(n) * 37) % 999).reshape(dims)
                 v.ravel()[0] = 101

@@ -40,6 +40,18 @@ machine" were measured at load ≈ 4; the earlier rows at load 10–30.
 For engine throughput, batch positions: `tokens` accepts `[N, 64, 96]`, and
 GEMM efficiency rises with N (m = 64·N rows per matmul).
 
+## Kokoro-82M TTS (16 phonemes -> 1.5 s of 24 kHz audio, quiet machine)
+
+| Change | wall |
+|---|---|
+| baseline (1-D convs on the generic N-D path) | 398 s |
+| Conv1D routed through im2col+SIMD GEMM | 11.5 s |
+| odometer general-broadcast path (Mul 2.65 -> 1.15 s) | 9.8 s |
+| GEMM-backed 1-D ConvTranspose (overlap-add off the profile) | 9.3 s |
+| + isolate pool with 1-D conv fan-out (bitwise-identical) | **7.3 s** |
+
+Remaining profile: Conv 69% (genuine GEMM work, ~15-20 GMAC per run).
+
 ## Vision models (224×224, batch 1, cosine-1.0 parity vs ORT throughout)
 
 | Date | Change | MobileNetV2 | ResNet18 |

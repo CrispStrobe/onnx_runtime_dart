@@ -25,7 +25,15 @@ embedder (external-data weights), the vision CNNs **MobileNetV2** and
 ReduceMax — with a complete pure-Dart scoring pipeline in
 [`example/aecmos/`](example/aecmos/)), **CAM++** (speaker-embedding x-vector:
 225 convs + BatchNorm/AveragePool/Pad/ReduceProd), **Maia3-5M** (chess
-transformer, policy + WDL value heads, Einsum attention), **Whisper-tiny** (encoder at 2e-4 relative — summation-order noise across
+transformer, policy + WDL value heads, Einsum attention), **Kokoro-82M TTS** — the full StyleTTS2/iSTFT-Net pipeline runs end to
+end (LSTMs, harmonic sine source, mid-graph STFT, GEMM-backed 1-D convs
+and transposed-conv overlap-add): components verify individually
+(feedforward path bitwise, harmonic source cosine-0.99996, first 2000
+waveform samples 0.9998), and the synthesized audio matches ORT's at
+**log-mel cosine 0.995**. Whole-waveform cosine is meaningless for this
+architecture — LSTM recurrence and sine phase chaos-amplify float
+ulps, as they would for any independent implementation.
+**Whisper-tiny** (encoder at 2e-4 relative — summation-order noise across
 1500-token attention, verified fusion-on/off — decoder AND
 `decoder_with_past` at cosine-1.0), **Moonshine-tiny** (encoder cosine-1.0
 and the merged If-branched decoder with its full 24-tensor KV cache,

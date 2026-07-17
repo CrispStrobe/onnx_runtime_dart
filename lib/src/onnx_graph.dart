@@ -464,8 +464,13 @@ class OnnxGraphExecutor {
         final b = transB ? ops.opTranspose(t, [1, 0]) : t;
         toPartition['gemm:$name'] = (b.f!, b.shape[0], b.shape[1]);
       } else if (node.opType == 'Conv' && node.input.length >= 2) {
-        final w = _initializers[node.input[1]];
-        if (w == null || !w.isFloat || w.rank != 4) continue;
+        var w = _initializers[node.input[1]];
+        if (w == null || !w.isFloat || (w.rank != 4 && w.rank != 3)) {
+          continue;
+        }
+        // 1-D convs pool as 2-D with a singleton trailing axis, so the
+        // output-row band split runs along time.
+        if (w.rank == 3) w = w.reshape([...w.shape, 1]);
         final biasT =
             node.input.length > 2 ? _initializers[node.input[2]] : null;
         if (node.input.length > 2 &&
@@ -550,34 +555,45 @@ class OnnxGraphExecutor {
                 y, beta == 1.0 ? c : ops.opMul(c, Tensor.scalarFloat(beta)));
           }
           outs = [y];
-        } else if (convX != null && convX.isFloat && convX.rank == 4) {
+        } else if (convX != null &&
+            convX.isFloat &&
+            (convX.rank == 4 || convX.rank == 3)) {
           final attrsC = attrs;
-          final w = _initializers[node.input[1]]!;
-          final strides = attrsC.getInts('strides');
-          final padsAttr = attrsC.getInts('pads');
-          final dilations = attrsC.getInts('dilations');
+          final oneD = convX.rank == 3;
+          final x4 = oneD ? convX.reshape([...convX.shape, 1]) : convX;
+          final w0 = _initializers[node.input[1]]!;
+          final w = oneD ? w0.reshape([...w0.shape, 1]) : w0;
+          final strides0 = attrsC.getInts('strides');
+          final pads0 = attrsC.getInts('pads');
+          final dil0 = attrsC.getInts('dilations');
+          final strides = oneD ? [strides0?.first ?? 1, 1] : strides0;
+          final padsAttr =
+              oneD ? [pads0?[0] ?? 0, 0, pads0?[1] ?? 0, 0] : pads0;
+          final dilations = oneD ? [dil0?.first ?? 1, 1] : dil0;
           final autoPad = attrsC.getString('auto_pad') ?? 'NOTSET';
-          final outSp = nn.convOutputSpatial(convX.shape.sublist(2),
+          final outSp = nn.convOutputSpatial(x4.shape.sublist(2),
               w.shape.sublist(2), strides, padsAttr, dilations, autoPad);
           if (outSp[0] < pool!.workerCount * 2) {
             outs = _dispatch(node, ins, attrs); // too few rows to split
           } else {
             final out = await pool.conv(
               node.input[1],
-              convX.f!,
-              convX.shape,
+              x4.f!,
+              x4.shape,
               strides: strides,
               pads: padsAttr,
               dilations: dilations,
               group: attrsC.getInt('group') ?? 1,
               autoPad: autoPad,
-              n: convX.shape[0],
+              n: x4.shape[0],
               m: w.shape[0],
               oh: outSp[0],
               ow: outSp[1],
             );
+            final y =
+                Tensor.float(out, [x4.shape[0], w.shape[0], ...outSp]);
             outs = [
-              Tensor.float(out, [convX.shape[0], w.shape[0], ...outSp])
+              oneD ? y.reshape([y.shape[0], y.shape[1], y.shape[2]]) : y
             ];
           }
         } else {
@@ -639,8 +655,11 @@ class OnnxGraphExecutor {
             outs = _dispatch(node, ins, attrs);
         }
       } catch (e) {
+        final shapes = [
+          for (final t in ins) t == null ? 'null' : t.shape.toString()
+        ].join(', ');
         throw StateError('ONNX graph execution failed at node "${node.name}" '
-            '(op=${node.opType}): $e');
+            '(op=${node.opType}, input shapes: $shapes): $e');
       }
       if (profile != null) {
         sw!.stop();
@@ -1244,6 +1263,8 @@ class OnnxGraphExecutor {
         return [ops.opSoftplus(need(0))];
       case 'Sign':
         return [ops.opSign(need(0))];
+      case 'Atan':
+        return [ops.opAtan(need(0))];
       case 'Floor':
         return [ops.opFloor(need(0))];
       case 'Ceil':

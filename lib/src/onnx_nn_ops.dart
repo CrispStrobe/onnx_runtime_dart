@@ -116,6 +116,21 @@ Tensor opConv(
   final nd = x.rank - 2;
   assert(nd >= 1 && nd <= 3, 'Conv supports 1-3 spatial dims, got rank ${x.rank}');
   assert(w.rank == x.rank, 'Conv weight rank must match input rank');
+  if (nd == 1) {
+    // 1-D convs ride the 2-D im2col/GEMM machinery (the generic N-D path
+    // walks coordinates per element — ~100x slower on vocoder-scale data).
+    final y = opConv(
+      x.reshape([x.shape[0], x.shape[1], 1, x.shape[2]]),
+      w.reshape([w.shape[0], w.shape[1], 1, w.shape[2]]),
+      bias,
+      strides: [1, strides?.first ?? 1],
+      pads: pads == null ? null : [0, pads[0], 0, pads[1]],
+      dilations: [1, dilations?.first ?? 1],
+      group: group,
+      autoPad: autoPad,
+    );
+    return y.reshape([y.shape[0], y.shape[1], y.shape[3]]);
+  }
   final n = x.shape[0], cIn = x.shape[1];
   final m = w.shape[0], cPerGroup = w.shape[1];
   assert(cIn == cPerGroup * group,
@@ -361,6 +376,55 @@ Tensor opConvTranspose(
   final d = dilations ?? List.filled(nd, 1);
   final op = outputPadding ?? List.filled(nd, 0);
   final p = List<int>.from(pads ?? List.filled(2 * nd, 0));
+
+  // 1-D fast path: y[m, f*s + k*d - pad] += (Wᵀ·X)[m*K + k, f] — the heavy
+  // contraction over channels runs on the GEMM kernel; the scatter is plain
+  // adds. (The generic path below walks per-element with inner loops; on
+  // vocoder overlap-adds that is seconds per call.)
+  if (nd == 1 && outputShape == null && n == 1) {
+    final f = inSp[0], k = kernel[0];
+    final outW = (f - 1) * s[0] + d[0] * (k - 1) + 1 + op[0] - p[0] - p[1];
+    final xf = x.asFloatList(), wf = w.asFloatList();
+    final out = Float32List(m * outW);
+    final mk = mPerGroup * k;
+    // wT[g]: [mPerGroup*k, cPerGroup] from W [C, M/g, K]
+    final wT = Float32List(mk * cPerGroup);
+    final prod = Float32List(mk * f);
+    for (int g = 0; g < group; g++) {
+      for (int c = 0; c < cPerGroup; c++) {
+        final wBase = ((g * cPerGroup + c) * mPerGroup) * k;
+        for (int mm = 0; mm < mPerGroup; mm++) {
+          for (int kk = 0; kk < k; kk++) {
+            wT[(mm * k + kk) * cPerGroup + c] = wf[wBase + mm * k + kk];
+          }
+        }
+      }
+      prod.fillRange(0, prod.length, 0);
+      gemm.matmulKernel(
+          wT, 0, xf, g * cPerGroup * f, prod, 0, mk, cPerGroup, f);
+      for (int mm = 0; mm < mPerGroup; mm++) {
+        final oBase = (g * mPerGroup + mm) * outW;
+        for (int kk = 0; kk < k; kk++) {
+          final pBase = (mm * k + kk) * f;
+          final shift = kk * d[0] - p[0];
+          for (int ff = 0; ff < f; ff++) {
+            final t = ff * s[0] + shift;
+            if (t >= 0 && t < outW) out[oBase + t] += prod[pBase + ff];
+          }
+        }
+      }
+    }
+    if (bias != null) {
+      final bf = bias.asFloatList();
+      for (int mm = 0; mm < m; mm++) {
+        final base = mm * outW;
+        for (int t = 0; t < outW; t++) {
+          out[base + t] += bf[mm];
+        }
+      }
+    }
+    return Tensor.float(out, [1, m, outW]);
+  }
 
   final outSp = List<int>.filled(nd, 0);
   for (int k = 0; k < nd; k++) {
@@ -859,7 +923,21 @@ Tensor opResize(Tensor x,
     String mode = 'nearest',
     String coordMode = 'half_pixel',
     String nearestMode = 'round_prefer_floor'}) {
-  assert(x.rank == 4, 'Resize implemented for 4-D NCHW tensors');
+  if (x.rank == 3) {
+    // 1-D temporal resize (NCW): run as NCHW with a singleton height.
+    final y = opResize(
+      x.reshape([x.shape[0], x.shape[1], 1, x.shape[2]]),
+      scales: scales == null
+          ? null
+          : [scales[0], scales[1], 1.0, scales[2]],
+      sizes: sizes == null ? null : [sizes[0], sizes[1], 1, sizes[2]],
+      mode: mode,
+      coordMode: coordMode,
+      nearestMode: nearestMode,
+    );
+    return y.reshape([y.shape[0], y.shape[1], y.shape[3]]);
+  }
+  assert(x.rank == 4, 'Resize implemented for 3-D (NCW) / 4-D NCHW tensors');
   final n = x.shape[0], c = x.shape[1], h = x.shape[2], w = x.shape[3];
   int outH, outW;
   double scaleH, scaleW;
