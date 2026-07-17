@@ -49,7 +49,11 @@ buckets), **GTE-v1.5** (pre-LN + RoPE + GeGLU), **ModernBERT**
 (gte-modernbert-base, global/local sliding-window attention),
 **NomicBERT** (nomic-embed-text-v1.5), **DeBERTa-v2**
 (mxbai-rerank-xsmall, disentangled attention), **SPLADE**
-(sparse lexical), arctic-embed-xs and multilingual-e5-small.
+(sparse lexical), arctic-embed-xs and multilingual-e5-small — plus gte-small,
+all-MiniLM-L12-v2, mxbai-rerank-base-v1 (DeBERTa-v2),
+granite-embedding-107m-multilingual, and **BGE-M3** (568M XLM-R,
+official export with external-data Constant attributes; token +
+sentence embeddings both cosine-1.0).
 
 One known precision-mode gap: exports that run regions in **fp16 compute**
 (115 `Cast`-to-fp16 pairs in `zerank-1-small` int4) execute here in float32
