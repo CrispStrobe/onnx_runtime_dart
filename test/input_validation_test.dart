@@ -54,4 +54,14 @@ void main() {
         throwsA(isA<ArgumentError>().having(
             (e) => e.message, 'message', contains('"X"'))));
   });
+
+  test('a malformed protobuf rejects with FormatException, not RangeError', () {
+    // Untrusted .onnx bytes with a corrupt length-delimited field: unknown
+    // field #100 (wire type 2) declaring an oversized length. The protobuf
+    // decoder leaks a RangeError from Uint8List.view; fromBytes must normalize
+    // it. (Found by coverage-guided fuzzing of OnnxModel.fromBytes.)
+    final bad = Uint8List.fromList([0xA2, 0x06, 0xFF, 0xFF, 0xFF, 0xFF, 0x0F]);
+    expect(() => OnnxModel.fromBytes(bad), throwsFormatException);
+    expect(() => OnnxModel.fromBytes(bad), throwsA(isNot(isA<RangeError>())));
+  });
 }

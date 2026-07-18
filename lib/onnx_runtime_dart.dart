@@ -53,9 +53,26 @@ class OnnxModel {
   /// [fuse] controls the load-time pattern fusion (GELU/SDPA/RMSNorm);
   /// disable it to execute the graph exactly node-by-node (diagnostics).
   factory OnnxModel.fromBytes(Uint8List bytes,
-          {ExternalDataResolver? externalData, bool fuse = true}) =>
-      OnnxModel._(OnnxGraphExecutor(ModelProto.fromBuffer(bytes),
-          externalData: externalData, fuse: fuse));
+      {ExternalDataResolver? externalData, bool fuse = true}) {
+    // ModelProto.fromBuffer parses untrusted bytes. The protobuf decoder
+    // signals malformed data with an Exception (InvalidProtocolBufferException),
+    // but a corrupt length-delimited field can instead leak a RangeError from
+    // Uint8List.view. Normalize any leaked Error to a clean FormatException so a
+    // bad/hostile .onnx never surfaces an opaque range error to the caller.
+    final ModelProto proto;
+    try {
+      proto = ModelProto.fromBuffer(bytes);
+    } catch (e) {
+      // GUARD:protobuf_leak >>>
+      if (e is! Exception) {
+        throw FormatException('Malformed ONNX model (protobuf decode): $e');
+      }
+      // GUARD:protobuf_leak <<<
+      rethrow;
+    }
+    return OnnxModel._(
+        OnnxGraphExecutor(proto, externalData: externalData, fuse: fuse));
+  }
 
   /// Runs the graph with the given named [inputs] and returns the requested
   /// named [outputNames].
