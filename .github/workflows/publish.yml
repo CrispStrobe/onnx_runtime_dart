@@ -14,3 +14,5 @@ jobs:
     permissions:
       id-token: write # required for OIDC authentication to pub.dev
     uses: dart-lang/setup-dart/.github/workflows/publish.yml@v1
+    with:
+      environment: pub.dev
