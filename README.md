@@ -96,6 +96,8 @@ linked).
 | AECMOS (2 echo-MOS models) | `microsoft/AEC-Challenge` (`AECMOS_local`) | Conv + MaxPool + bidirectional GRU + `ReduceMax`; full scorer in [`example/aecmos/`](example/aecmos/) | 1.0 (max\|Δ\| 1.2e-7) |
 | CAM++ speaker embedding `†` | CosyVoice3 (`campplus.onnx`) | x-vector: 225 convs, `ReduceProd` | 1.0 |
 | CosyVoice3 speech tokenizer `†` | CosyVoice3 (`speech_tokenizer_v3.onnx`) | discrete speech tokens | **25/25 tokens exactly equal** |
+| FastConformer CTC `†` | NeMo FastConformer (local ONNX export) | Conformer + CTC, `LogSoftmax` | 1.0 |
+| ECAPA-TDNN language-ID `†` | SpeechBrain ECAPA-TDNN (local ONNX export) | SE-Res2 TDNN, attentive stat pooling | 1.0 |
 
 ### Games
 

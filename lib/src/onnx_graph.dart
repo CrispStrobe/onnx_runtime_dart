@@ -950,6 +950,8 @@ class OnnxGraphExecutor {
         ];
       case 'Softmax':
         return [ops.opSoftmax(need(0), attrs.getInt('axis') ?? -1)];
+      case 'LogSoftmax':
+        return [ops.opLogSoftmax(need(0), attrs.getInt('axis') ?? -1)];
       case 'LayerNormalization':
         return [
           ops.opLayerNormalization(

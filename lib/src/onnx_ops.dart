@@ -1169,6 +1169,40 @@ Tensor opSoftmax(Tensor x, int axis) {
   return Tensor.float(out, x.shape);
 }
 
+/// `LogSoftmax(x) = x - max - log(sum(exp(x - max)))` — numerically stable
+/// via the same max-shift as Softmax, but keeping the result in log space
+/// (CTC / LID heads use this).
+Tensor opLogSoftmax(Tensor x, int axis) {
+  final rank = x.shape.length;
+  final ax = axis < 0 ? axis + rank : axis;
+  final outerSize = x.shape.sublist(0, ax).fold<int>(1, (a, b) => a * b);
+  final axisSize = x.shape[ax];
+  final innerSize = x.shape.sublist(ax + 1).fold<int>(1, (a, b) => a * b);
+
+  final out = Float32List(x.length);
+  for (int outer = 0; outer < outerSize; outer++) {
+    for (int inner = 0; inner < innerSize; inner++) {
+      double maxV = double.negativeInfinity;
+      for (int a = 0; a < axisSize; a++) {
+        final v = x.getD(outer * axisSize * innerSize + a * innerSize + inner);
+        if (v > maxV) maxV = v;
+      }
+      double sum = 0;
+      for (int a = 0; a < axisSize; a++) {
+        sum += math.exp(
+            x.getD(outer * axisSize * innerSize + a * innerSize + inner) -
+                maxV);
+      }
+      final logSum = maxV + math.log(sum);
+      for (int a = 0; a < axisSize; a++) {
+        final idx = outer * axisSize * innerSize + a * innerSize + inner;
+        out[idx] = x.getD(idx) - logSum;
+      }
+    }
+  }
+  return Tensor.float(out, x.shape);
+}
+
 Tensor opLayerNormalization(
     Tensor x, Tensor scale, Tensor bias, int axis, double epsilon) {
   final rank = x.shape.length;

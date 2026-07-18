@@ -124,6 +124,12 @@ def main():
     emit("add_broadcast_middle",
          [helper.make_node("Add", ["a", "b"], ["out0"])],
          {"a": f32(2, 1, 4, 3), "b": f32(5, 1, 3)})
+    emit("logsoftmax_lastaxis",
+         [helper.make_node("LogSoftmax", ["x"], ["out0"], axis=-1)],
+         {"x": f32(2, 3, 7)})
+    emit("logsoftmax_axis1",
+         [helper.make_node("LogSoftmax", ["x"], ["out0"], axis=1)],
+         {"x": (f32(2, 5, 4) * 3)})
     emit("softmax_lastaxis",
          [helper.make_node("Softmax", ["x"], ["out0"], axis=-1)],
          {"x": f32(2, 3, 7)})
