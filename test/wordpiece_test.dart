@@ -43,4 +43,29 @@ void main() {
         ['[CLS]', 'hello', '[SEP]', 'world', '[SEP]']);
     expect(types, [0, 0, 0, 1, 1]);
   });
+
+  test('maxLength truncates content, reserving special tokens', () {
+    const text = 'hello world hello world !';
+    // budget = maxLength(4) - 2 specials = 2 content tokens.
+    expect(
+        tok.encode('hello world', maxLength: 5).map((i) => tok.idToToken[i]),
+        ['[CLS]', 'hello', 'world', '[SEP]']); // fits, unchanged
+    final right = tok.encode(text, maxLength: 4);
+    expect(right.length, 4);
+    expect(right.first, tok.vocab['[CLS]']);
+    expect(right.last, tok.vocab['[SEP]']);
+    expect(right.sublist(1, 3), [tok.vocab['hello'], tok.vocab['world']]);
+    // left keeps the tail instead of the front.
+    final left =
+        tok.encode(text, maxLength: 4, direction: TruncationDirection.left);
+    expect(left.sublist(1, 3), [tok.vocab['world'], tok.vocab['!']]);
+  });
+
+  test('encodePair longest_first keeps the pair within maxLength', () {
+    final (ids, _) = tok.encodePair('hello world hello', 'world',
+        maxLength: 5); // 3 specials -> 2 content across both sides
+    expect(ids.length, lessThanOrEqualTo(5));
+    expect(ids.first, tok.vocab['[CLS]']);
+    expect(ids.last, tok.vocab['[SEP]']);
+  });
 }

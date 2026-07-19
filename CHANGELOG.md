@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.10.0
+
+- **Max-length truncation for all tokenizers** — the production gap for long
+  inputs (documents that exceed a model's sequence limit) and a bound on the
+  linear encode time. `encode(text, maxLength: N, direction: …)` and
+  `encodePair(a, b, maxLength: N, strategy: …, direction: …)`:
+  - single sequences truncate to `N` reserving the template's special tokens,
+    keeping the front (`right`) or tail (`left`);
+  - pairs use `longest_first` (default) / `only-first` / `only-second`,
+    trimming from whichever side is longer — matching HuggingFace
+    `truncate_sequences` exactly (verified 8/8 vs the reference `tokenizers`
+    library for both WordPiece/BERT and Unigram/XLM-R, both directions and
+    budgets, single + pair).
+  - BPE (byte-level) truncates the id list directly.
+  New `TruncationDirection` / `TruncationStrategy` enums are exported.
+
 ## 0.9.1
 
 - **Security: external-data path traversal + unbounded allocation closed.**

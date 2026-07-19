@@ -33,6 +33,8 @@ export 'src/tensor.dart' show Tensor, DType, TensorSpec;
 export 'src/bpe_tokenizer.dart' show BpeTokenizer;
 export 'src/wordpiece_tokenizer.dart' show WordPieceTokenizer;
 export 'src/unigram_tokenizer.dart' show UnigramTokenizer;
+export 'src/token_template.dart'
+    show TruncationDirection, TruncationStrategy;
 export 'src/onnx_graph.dart' show OnnxGraphExecutor, ExecutionProfile;
 export 'src/onnx_proto_loader.dart' show ExternalDataResolver;
 

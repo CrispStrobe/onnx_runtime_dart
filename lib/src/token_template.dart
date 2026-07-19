@@ -5,6 +5,62 @@
 /// segments 0/1), RoBERTa/XLM-R (`<s> A </s></s> B </s>`), and variants.
 library;
 
+/// Which end of a too-long sequence to drop: `right` keeps the front (drop the
+/// tail — the usual default), `left` keeps the tail (drop the front).
+enum TruncationDirection { right, left }
+
+/// How to shrink a sentence pair to fit: remove from whichever side is longer
+/// ([longestFirst], the HF default), or only from the first / second sequence.
+enum TruncationStrategy { longestFirst, onlyFirst, onlySecond }
+
+/// Number of literal special tokens a template contributes (the budget a
+/// truncation limit must reserve, e.g. 2 for `[CLS] A [SEP]`, 3 for a pair).
+int countSpecials(List<TemplateItem> tpl) =>
+    tpl.where((i) => i.specialId != null).length;
+
+/// Truncate one sequence to at most [budget] ids, keeping the front ([right])
+/// or the tail ([left]).
+List<int> truncateSingle(List<int> ids, int budget, TruncationDirection dir) {
+  if (budget < 0) budget = 0;
+  if (ids.length <= budget) return ids;
+  return dir == TruncationDirection.right
+      ? ids.sublist(0, budget)
+      : ids.sublist(ids.length - budget);
+}
+
+/// Shrink a pair `(a, b)` so `a.length + b.length <= budget`, per [strategy]
+/// and [dir] — mirrors HuggingFace `truncate_sequences`: for [longestFirst],
+/// each removed token comes from whichever list is currently longer (ties →
+/// the second), dropped from the tail ([right]) or front ([left]).
+(List<int>, List<int>) truncatePair(List<int> a, List<int> b, int budget,
+    TruncationStrategy strategy, TruncationDirection dir) {
+  if (budget < 0) budget = 0;
+  var an = a.length, bn = b.length;
+  var remove = an + bn - budget;
+  if (remove <= 0) return (a, b);
+  switch (strategy) {
+    case TruncationStrategy.onlyFirst:
+      an = (an - remove).clamp(0, an);
+    case TruncationStrategy.onlySecond:
+      bn = (bn - remove).clamp(0, bn);
+    case TruncationStrategy.longestFirst:
+      while (remove > 0 && (an > 0 || bn > 0)) {
+        if (an > bn) {
+          an--;
+        } else {
+          bn--;
+        }
+        remove--;
+      }
+  }
+  List<int> cut(List<int> s, int keep) => keep >= s.length
+      ? s
+      : (dir == TruncationDirection.right
+          ? s.sublist(0, keep)
+          : s.sublist(s.length - keep));
+  return (cut(a, an), cut(b, bn));
+}
+
 /// One entry of a post-processor template: either a literal special token
 /// (`specialId`) or a placeholder for sequence A/B (`seqIsB`), with its
 /// segment id.

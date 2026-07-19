@@ -245,7 +245,11 @@ All three are validated for **exact** id-match against the reference
 full-width text). They also do **sentence-pair** encoding (`encodePair`) for
 cross-encoders — following the `pair` post-processor template, returning both
 token ids and `token_type_ids` (BERT `[CLS] A [SEP] B [SEP]` segments 0/1,
-XLM-R `<s> A </s></s> B </s>`).
+XLM-R `<s> A </s></s> B </s>`) — and **max-length truncation** (`maxLength:`,
+with `right`/`left` direction and `longest_first`/`only-first`/`only-second`
+pair strategies), reserving room for the special tokens exactly as the
+reference does. Malformed configs reject with `FormatException`; the parsers
+are fuzz-hardened (see `tool/fuzz/`).
 
 Verified **end-to-end** at cosine 1.0 / reference-exact:
 - **text → embedding** — WordPiece → all-MiniLM-L6 and Unigram →

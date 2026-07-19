@@ -15,6 +15,7 @@ import 'dart:io';
 
 import 'nfc.dart';
 import 'nfkc_compat.dart';
+import 'token_template.dart';
 
 class BpeTokenizer {
   final Map<String, int> vocab;
@@ -199,17 +200,25 @@ class BpeTokenizer {
   }
 
   /// Encode [text] to token ids, splitting out special/added tokens first.
-  List<int> encode(String text) {
-    if (_specialRe == null) return _encodeChunk(text);
+  /// [maxLength] truncates the result (byte-level BPE has no template specials);
+  /// [direction] keeps the front (`right`) or tail.
+  List<int> encode(String text,
+      {int? maxLength, TruncationDirection direction = TruncationDirection.right}) {
     final ids = <int>[];
-    var last = 0;
-    for (final m in _specialRe.allMatches(text)) {
-      if (m.start > last) ids.addAll(_encodeChunk(text.substring(last, m.start)));
-      ids.add(specials[m.group(0)!]!);
-      last = m.end;
+    if (_specialRe == null) {
+      ids.addAll(_encodeChunk(text));
+    } else {
+      var last = 0;
+      for (final m in _specialRe.allMatches(text)) {
+        if (m.start > last) {
+          ids.addAll(_encodeChunk(text.substring(last, m.start)));
+        }
+        ids.add(specials[m.group(0)!]!);
+        last = m.end;
+      }
+      if (last < text.length) ids.addAll(_encodeChunk(text.substring(last)));
     }
-    if (last < text.length) ids.addAll(_encodeChunk(text.substring(last)));
-    return ids;
+    return maxLength == null ? ids : truncateSingle(ids, maxLength, direction);
   }
 
   /// Decode token ids back to text (reverse the byte-level mapping and UTF-8

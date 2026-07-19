@@ -205,10 +205,23 @@ class UnigramTokenizer {
     return ids.reversed.toList();
   }
 
+  int get _singleSpecials =>
+      singleTpl != null ? countSpecials(singleTpl!) : ((bosId != null ? 1 : 0) + (eosId != null ? 1 : 0));
+  int get _pairSpecials => pairTpl != null ? countSpecials(pairTpl!) : 4;
+
   /// Encode [text] to token ids, wrapped per the `single` post-processor
   /// template (`<s> … </s>`). `addSpecial: false` returns the bare piece ids.
-  List<int> encode(String text, {bool addSpecial = true}) {
-    final raw = _rawIds(text);
+  /// [maxLength] truncates the total (reserving special tokens); [direction]
+  /// keeps the front (`right`) or tail.
+  List<int> encode(String text,
+      {bool addSpecial = true,
+      int? maxLength,
+      TruncationDirection direction = TruncationDirection.right}) {
+    var raw = _rawIds(text);
+    if (maxLength != null) {
+      raw = truncateSingle(
+          raw, maxLength - (addSpecial ? _singleSpecials : 0), direction);
+    }
     if (!addSpecial) return raw;
     if (singleTpl != null) return applyTemplate(singleTpl!, raw, null).$1;
     return [if (bosId != null) bosId!, ...raw, if (eosId != null) eosId!];
@@ -216,9 +229,17 @@ class UnigramTokenizer {
 
   /// Encode a sentence pair for cross-encoders, following the `pair`
   /// post-processor template (`<s> A </s></s> B </s>` for XLM-R). Returns the
-  /// token ids and matching `token_type_ids`.
-  (List<int>, List<int>) encodePair(String a, String b) {
-    final aIds = _rawIds(a), bIds = _rawIds(b);
+  /// token ids and matching `token_type_ids`. [maxLength] bounds the total;
+  /// [strategy]/[direction] choose which side and end to trim.
+  (List<int>, List<int>) encodePair(String a, String b,
+      {int? maxLength,
+      TruncationStrategy strategy = TruncationStrategy.longestFirst,
+      TruncationDirection direction = TruncationDirection.right}) {
+    var aIds = _rawIds(a), bIds = _rawIds(b);
+    if (maxLength != null) {
+      (aIds, bIds) = truncatePair(
+          aIds, bIds, maxLength - _pairSpecials, strategy, direction);
+    }
     if (pairTpl != null) return applyTemplate(pairTpl!, aIds, bIds);
     final ids = [
       if (bosId != null) bosId!,

@@ -240,11 +240,24 @@ class WordPieceTokenizer {
     return ids;
   }
 
+  /// Number of special tokens the single/pair template contributes (the budget
+  /// truncation reserves): the template's special count, or the BERT default.
+  int get _singleSpecials => singleTpl != null ? countSpecials(singleTpl!) : 2;
+  int get _pairSpecials => pairTpl != null ? countSpecials(pairTpl!) : 3;
+
   /// Encode [text] to token ids, wrapped per the `single` post-processor
   /// template (`[CLS] … [SEP]` for BERT). `addSpecial: false` returns the bare
-  /// piece ids.
-  List<int> encode(String text, {bool addSpecial = true}) {
-    final raw = _rawIds(text);
+  /// piece ids. [maxLength] truncates the total sequence (reserving room for
+  /// the special tokens) — [direction] keeps the front (`right`) or tail.
+  List<int> encode(String text,
+      {bool addSpecial = true,
+      int? maxLength,
+      TruncationDirection direction = TruncationDirection.right}) {
+    var raw = _rawIds(text);
+    if (maxLength != null) {
+      raw = truncateSingle(
+          raw, maxLength - (addSpecial ? _singleSpecials : 0), direction);
+    }
     if (!addSpecial) return raw;
     if (singleTpl != null) return applyTemplate(singleTpl!, raw, null).$1;
     return [if (clsId >= 0) clsId, ...raw, if (sepId >= 0) sepId];
@@ -252,9 +265,18 @@ class WordPieceTokenizer {
 
   /// Encode a sentence pair (query, document) for cross-encoders, following the
   /// `pair` post-processor template (`[CLS] A [SEP] B [SEP]`, segments 0/1 for
-  /// BERT). Returns the token ids and matching `token_type_ids`.
-  (List<int>, List<int>) encodePair(String a, String b) {
-    final aIds = _rawIds(a), bIds = _rawIds(b);
+  /// BERT). Returns the token ids and matching `token_type_ids`. [maxLength]
+  /// bounds the total (reserving the special tokens); [strategy]/[direction]
+  /// choose which side and end to trim.
+  (List<int>, List<int>) encodePair(String a, String b,
+      {int? maxLength,
+      TruncationStrategy strategy = TruncationStrategy.longestFirst,
+      TruncationDirection direction = TruncationDirection.right}) {
+    var aIds = _rawIds(a), bIds = _rawIds(b);
+    if (maxLength != null) {
+      (aIds, bIds) = truncatePair(
+          aIds, bIds, maxLength - _pairSpecials, strategy, direction);
+    }
     if (pairTpl != null) return applyTemplate(pairTpl!, aIds, bIds);
     // Default BERT pair layout when no template is present.
     final ids = [if (clsId >= 0) clsId, ...aIds, sepId, ...bIds, sepId];
