@@ -783,6 +783,33 @@ def main():
                        "yz": np.array(128, dtype=np.uint8),
                        "bias": RNG.integers(-500, 500, 4).astype(np.int32)})
 
+    # ---- fused transformer ops (com.microsoft) ----
+    B, Sq, Hid, NH = 1, 5, 24, 4
+    hs = Hid // NH
+    emit("mha_with_bias",
+         [helper.make_node("MultiHeadAttention", ["q", "k", "v", "", "", "ab"],
+                           ["out0"], num_heads=NH, scale=0.35,
+                           domain="com.microsoft")],
+         {"q": f32(B, Sq, Hid), "k": f32(B, Sq, Hid), "v": f32(B, Sq, Hid)},
+         initializers={"ab": f32(B, NH, Sq, Sq)}, ms_domain=True)
+    emit("mha_no_bias",
+         [helper.make_node("MultiHeadAttention", ["q", "k", "v"], ["out0"],
+                           num_heads=NH, domain="com.microsoft")],
+         {"q": f32(B, Sq, Hid), "k": f32(B, Sq, Hid), "v": f32(B, Sq, Hid)},
+         ms_domain=True)
+    # RotaryEmbedding: input [B,S,NH*hs], non-interleaved, full-head rotation.
+    maxpos = 16
+    ang = (np.arange(hs // 2) / (hs // 2)).astype(np.float32)
+    posv = np.arange(maxpos)[:, None] * ang[None, :]
+    emit("rotary_embedding",
+         [helper.make_node("RotaryEmbedding",
+                           ["x", "pos", "cosc", "sinc"], ["out0"],
+                           domain="com.microsoft")],
+         {"x": f32(B, Sq, NH * hs)},
+         initializers={"pos": np.arange(Sq).reshape(B, Sq).astype(np.int64),
+                       "cosc": np.cos(posv).astype(np.float32),
+                       "sinc": np.sin(posv).astype(np.float32)},
+         ms_domain=True)
     # ---- MatMulNBits (com.microsoft, 4-bit block-quantized weights) ----
     def pack_q4(wq):  # [N, K] values 0..15 -> [N, nblocks, block/2] packed
         N, K = wq.shape

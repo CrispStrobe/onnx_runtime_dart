@@ -839,6 +839,41 @@ class OnnxGraphExecutor {
           ops.opRMSNorm(need(0), need(1), attrs.getInt('axis')!,
               attrs.getFloat('epsilon')!)
         ];
+      case 'MultiHeadAttention':
+        return [
+          ops.opMultiHeadAttention(need(0), need(1), need(2),
+              ins.length > 5 ? ins[5] : null,
+              numHeads: attrs.getInt('num_heads')!,
+              scale: attrs.getFloat('scale'))
+        ];
+      case 'RotaryEmbedding':
+        return [
+          ops.opRotaryEmbedding(need(0), need(1), need(2), need(3),
+              interleaved: (attrs.getInt('interleaved') ?? 0) != 0,
+              numHeads: attrs.getInt('num_heads') ?? 0,
+              rotaryEmbeddingDim: attrs.getInt('rotary_embedding_dim') ?? 0)
+        ];
+      case 'SimplifiedLayerNormalization':
+        // com.microsoft RMSNorm: x * rsqrt(mean(x^2, axis) + eps) * scale.
+        return [
+          ops.opRMSNorm(need(0), need(1), attrs.getInt('axis') ?? -1,
+              attrs.getFloat('epsilon') ?? 1e-5)
+        ];
+      case 'SkipSimplifiedLayerNormalization':
+        // Fused residual add + RMSNorm: inputs (x, skip, scale[, bias]);
+        // outputs (rmsnorm(x+skip)[, mean, inv_std, x+skip]).
+        final sum = ops.opAdd(need(0), need(1));
+        final normed = ops.opRMSNorm(sum, need(2), -1,
+            attrs.getFloat('epsilon') ?? 1e-5);
+        final withBias = ins.length > 3 && ins[3] != null
+            ? ops.opAdd(normed, ins[3]!)
+            : normed;
+        return [
+          withBias,
+          if (node.output.length > 1) Tensor.scalarFloat(0),
+          if (node.output.length > 2) Tensor.scalarFloat(0),
+          if (node.output.length > 3) sum,
+        ];
       case '_FusedSDPA':
         return [
           ops.opFusedSDPA(need(0), need(1), need(2), need(3),

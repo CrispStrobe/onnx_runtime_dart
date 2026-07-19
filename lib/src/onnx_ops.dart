@@ -1383,6 +1383,85 @@ Tensor opRMSNorm(Tensor x, Tensor gamma, int axis, double eps) {
   return Tensor.float(out, x.shape);
 }
 
+/// `MultiHeadAttention` (com.microsoft) — fused multi-head attention over
+/// already-projected `[batch, seq, hidden]` Q/K/V. [attentionBias] (optional)
+/// is an additive `[batch, heads, seq, kvSeq]` mask added to the scaled
+/// scores before softmax. Q/K/V may carry different head counts already
+/// expanded to match (grouped-query attention is expanded upstream here).
+Tensor opMultiHeadAttention(Tensor q, Tensor k, Tensor v, Tensor? attentionBias,
+    {required int numHeads, double? scale}) {
+  final batch = q.shape[0], seq = q.shape[1], hidden = q.shape[2];
+  final headSize = hidden ~/ numHeads;
+  final kvSeq = k.shape[1];
+  final s = scale ?? (1.0 / math.sqrt(headSize));
+  final qf = q.f ?? q.asFloatList();
+  final kf = k.f ?? k.asFloatList();
+  final vf = v.f ?? v.asFloatList();
+  final bias = attentionBias?.asFloatList();
+  final biasHeads = attentionBias == null ? 0 : attentionBias.shape[1];
+
+  final out = Float32List(batch * seq * hidden);
+  final qh = Float32List(seq * headSize);
+  final kt = Float32List(headSize * kvSeq); // K_h transposed [d, kvSeq]
+  final vh = Float32List(kvSeq * headSize);
+  final scores = Float32List(seq * kvSeq);
+  final ctx = Float32List(seq * headSize);
+
+  for (int b = 0; b < batch; b++) {
+    for (int h = 0; h < numHeads; h++) {
+      // Gather this head's Q [seq,d], Kᵀ [d,kvSeq], V [kvSeq,d].
+      for (int i = 0; i < seq; i++) {
+        final src = (b * seq + i) * hidden + h * headSize;
+        for (int d = 0; d < headSize; d++) {
+          qh[i * headSize + d] = qf[src + d];
+        }
+      }
+      for (int j = 0; j < kvSeq; j++) {
+        final src = (b * kvSeq + j) * hidden + h * headSize;
+        for (int d = 0; d < headSize; d++) {
+          kt[d * kvSeq + j] = kf[src + d];
+          vh[j * headSize + d] = vf[src + d];
+        }
+      }
+      // scores = Q·Kᵀ, then scale + bias + row softmax.
+      scores.fillRange(0, seq * kvSeq, 0);
+      gemm.matmulKernel(qh, 0, kt, 0, scores, 0, seq, headSize, kvSeq);
+      final biasBase =
+          bias == null ? 0 : (b * biasHeads + (h % biasHeads)) * seq * kvSeq;
+      for (int i = 0; i < seq; i++) {
+        final row = i * kvSeq;
+        double maxV = double.negativeInfinity;
+        for (int j = 0; j < kvSeq; j++) {
+          var sc = scores[row + j] * s;
+          if (bias != null) sc += bias[biasBase + row + j];
+          scores[row + j] = sc;
+          if (sc > maxV) maxV = sc;
+        }
+        double sum = 0;
+        for (int j = 0; j < kvSeq; j++) {
+          final e = math.exp(scores[row + j] - maxV);
+          scores[row + j] = e;
+          sum += e;
+        }
+        final inv = 1.0 / sum;
+        for (int j = 0; j < kvSeq; j++) {
+          scores[row + j] *= inv;
+        }
+      }
+      // context = P·V, scattered back to [b, seq, h*d].
+      ctx.fillRange(0, seq * headSize, 0);
+      gemm.matmulKernel(scores, 0, vh, 0, ctx, 0, seq, kvSeq, headSize);
+      for (int i = 0; i < seq; i++) {
+        final dst = (b * seq + i) * hidden + h * headSize;
+        for (int d = 0; d < headSize; d++) {
+          out[dst + d] = ctx[i * headSize + d];
+        }
+      }
+    }
+  }
+  return Tensor.float(out, [batch, seq, hidden]);
+}
+
 /// Fused scaled-dot-product-attention epilogue:
 /// `MatMul(Softmax(MatMul(a, b) * scale + mask, axis: -1), v)`.
 ///
@@ -1771,6 +1850,74 @@ Tensor opWhere(Tensor cond, Tensor a, Tensor b) {
 
 /// `Size` — total element count as an int64 scalar.
 Tensor opSize(Tensor x) => Tensor.scalarInt(x.length);
+
+/// `RotaryEmbedding` (com.microsoft / onnx opset 23) — fused rotary position
+/// embedding. [x] is `[batch, seq, hidden]` (3-D) or
+/// `[batch, heads, seq, headSize]` (4-D); [cosCache]/[sinCache] are
+/// `[maxPos, rotaryDim/2]`, indexed by [positionIds] `[batch, seq]`. Only the
+/// first `rotaryDim` of each head is rotated (the tail passes through);
+/// `interleaved` selects the GPT-J pairing, else the GPT-NeoX rotate-half.
+Tensor opRotaryEmbedding(Tensor x, Tensor positionIds, Tensor cosCache,
+    Tensor sinCache,
+    {bool interleaved = false, int numHeads = 0, int rotaryEmbeddingDim = 0}) {
+  final xf = x.f ?? x.asFloatList();
+  final cos = cosCache.asFloatList(), sin = sinCache.asFloatList();
+  final pos = positionIds.asIntList();
+  final halfRot = cosCache.shape.last;
+  final rotaryDim = rotaryEmbeddingDim > 0 ? rotaryEmbeddingDim : 2 * halfRot;
+
+  int batch, seq, heads, headSize;
+  if (x.rank == 4) {
+    batch = x.shape[0];
+    heads = x.shape[1];
+    seq = x.shape[2];
+    headSize = x.shape[3];
+  } else {
+    batch = x.shape[0];
+    seq = x.shape[1];
+    final hidden = x.shape[2];
+    // num_heads=0 → infer from a full-rotation head (headSize == rotaryDim).
+    headSize = numHeads > 0 ? hidden ~/ numHeads : rotaryDim;
+    heads = hidden ~/ headSize;
+  }
+  final cosStride = halfRot; // cos/sin row length per position
+
+  final out = Float32List(xf.length);
+  // Layout: 4-D is [b,h,s,d] contiguous; 3-D is [b,s,h*d] contiguous.
+  for (int b = 0; b < batch; b++) {
+    for (int s = 0; s < seq; s++) {
+      final p = pos[(positionIds.rank == 1 ? 0 : b) * seq + s];
+      final cBase = p * cosStride;
+      for (int h = 0; h < heads; h++) {
+        final base = x.rank == 4
+            ? ((b * heads + h) * seq + s) * headSize
+            : (b * seq + s) * heads * headSize + h * headSize;
+        // Rotated portion.
+        if (interleaved) {
+          for (int i = 0; i < rotaryDim ~/ 2; i++) {
+            final c = cos[cBase + i], sn = sin[cBase + i];
+            final x0 = xf[base + 2 * i], x1 = xf[base + 2 * i + 1];
+            out[base + 2 * i] = x0 * c - x1 * sn;
+            out[base + 2 * i + 1] = x1 * c + x0 * sn;
+          }
+        } else {
+          final half = rotaryDim ~/ 2;
+          for (int i = 0; i < half; i++) {
+            final c = cos[cBase + i], sn = sin[cBase + i];
+            final x0 = xf[base + i], x1 = xf[base + i + half];
+            out[base + i] = x0 * c - x1 * sn;
+            out[base + i + half] = x1 * c + x0 * sn;
+          }
+        }
+        // Pass-through tail (headSize beyond rotaryDim).
+        for (int i = rotaryDim; i < headSize; i++) {
+          out[base + i] = xf[base + i];
+        }
+      }
+    }
+  }
+  return Tensor.float(out, x.shape);
+}
 
 /// `RandomNormalLike` / `RandomNormal` — a Gaussian-noise tensor. A
 /// pseudo-random draw can never match ORT's Mersenne-Twister stream across
