@@ -108,6 +108,7 @@ from `tokenizer.json`, ChatML prompt, greedy + temperature/top-k sampling);
 | emotion-ferplus | ONNX Model Zoo (`emotion-ferplus-8`) | classification | 1.0 |
 | SAM (ViT-H) mask decoder | `Annotation-AI/sam-vit-h-decoder-onnx` | segmentation prompting, 3 outputs | 1.0 |
 | TAESD (SD VAE decoder) | `julienkay/taesd` | diffusion VAE, latent `[1,4,64,64]` → 512² | 1.0 (max\|Δ\| 9e-6) |
+| Depth-Anything-v2-small | `onnx-community/depth-anything-v2-small` | monocular depth (DINOv2 ViT + **DPT** head: `Resize`×6, `ConvTranspose`); dense `[1,H,W]` depth map | 1.0 (max\|Δ\| 1.5e-5) |
 
 ### Speech — ASR, TTS, VAD, scoring, tokenization
 
