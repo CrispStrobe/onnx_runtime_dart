@@ -35,4 +35,12 @@ void main() {
         ['[CLS]', 'Hello', ',', 'World', '!', '[SEP]']);
     expect(cased.tokens('Caf\u00e9'), ['[CLS]', 'Caf\u00e9', '[SEP]']);
   });
+
+  test('encodePair follows the pair template with segment ids', () {
+    // [CLS] hello [SEP] world [SEP], token_type_ids 0,0,0,1,1
+    final (ids, types) = tok.encodePair('hello', 'world');
+    expect(ids.map((i) => tok.idToToken[i]).toList(),
+        ['[CLS]', 'hello', '[SEP]', 'world', '[SEP]']);
+    expect(types, [0, 0, 0, 1, 1]);
+  });
 }

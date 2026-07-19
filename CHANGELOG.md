@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.8.0
+
+- **Sentence-pair tokenization for cross-encoder rerankers.** All three
+  tokenizers gain `encodePair(a, b)`, applying the `pair` post-processor
+  template and returning both token ids and `token_type_ids` — BERT
+  (`[CLS] A [SEP] B [SEP]`, segments 0/1) and RoBERTa/XLM-R
+  (`<s> A </s></s> B </s>`). Special-token placement and segment ids are now
+  driven by the model's `TemplateProcessing` template (`token_template.dart`)
+  rather than hard-coded, so `encode`/`encodePair` are exact across variants.
+  Verified reference-exact (ids + type_ids) vs the `tokenizers` library, and
+  **end-to-end**: pure-Dart pair-tokenize → ms-marco-MiniLM-L6 cross-encoder
+  relevance logits match ORT within 2e-6 (`tool/rerank_e2e.dart`).
+
 ## 0.7.0
 
 - **`UnigramTokenizer` — the multilingual embedder family, in pure Dart.**

@@ -17,6 +17,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'nfkc_compat.dart';
+import 'token_template.dart';
 
 class UnigramTokenizer {
   final Map<String, int> pieceToId;
@@ -28,6 +29,7 @@ class UnigramTokenizer {
   final String replacement; // metaspace marker, "▁"
   final bool addPrefixSpace;
   final int? bosId, eosId;
+  final List<TemplateItem>? singleTpl, pairTpl;
 
   UnigramTokenizer._(
       this.pieceToId,
@@ -39,7 +41,9 @@ class UnigramTokenizer {
       this.replacement,
       this.addPrefixSpace,
       this.bosId,
-      this.eosId);
+      this.eosId,
+      this.singleTpl,
+      this.pairTpl);
 
   factory UnigramTokenizer.fromFile(String path) {
     final j = jsonDecode(File(path).readAsStringSync()) as Map<String, dynamic>;
@@ -80,23 +84,26 @@ class UnigramTokenizer {
         }
       }
     }
-    // Special <s>/</s> ids from the post-processor template, if present.
-    int? bos, eos;
+    // Post-processor templates (special-token placement + segment ids).
     final pp = j['post_processor'];
-    if (pp is Map<String, dynamic> && pp['single'] is List) {
-      for (final item in pp['single'] as List) {
-        final st = (item as Map<String, dynamic>)['SpecialToken'];
-        if (st is Map<String, dynamic>) {
-          final id = pieceToId[st['id']];
-          if (id != null) {
-            bos ??= id;
-            eos = id;
-          }
+    final single = pp is Map<String, dynamic>
+        ? parseTemplate(pp['single'], (s) => pieceToId[s])
+        : null;
+    final pair = pp is Map<String, dynamic>
+        ? parseTemplate(pp['pair'], (s) => pieceToId[s])
+        : null;
+    // Fallback <s>/</s> from the single template's specials.
+    int? bos, eos;
+    if (single != null) {
+      for (final it in single) {
+        if (it.specialId != null) {
+          bos ??= it.specialId;
+          eos = it.specialId;
         }
       }
     }
     return UnigramTokenizer._(pieceToId, pieceScore, idToPiece, unkId, maxLen,
-        minScore - 10.0, replacement, addPrefix, bos, eos);
+        minScore - 10.0, replacement, addPrefix, bos, eos, single, pair);
   }
 
   /// Whitespace → space, collapse runs (the `Replace " {2,}"→" "` step after
@@ -134,7 +141,7 @@ class UnigramTokenizer {
 
   /// Viterbi: pick the segmentation of [text] into vocab pieces maximizing the
   /// summed log-probs; unmatchable characters become a single `<unk>`.
-  List<int> encode(String text, {bool addSpecial = true}) {
+  List<int> _rawIds(String text) {
     final runes = _normalize(text).runes.toList();
     final n = runes.length;
     final best = List<double>.filled(n + 1, double.negativeInfinity);
@@ -168,9 +175,33 @@ class UnigramTokenizer {
       ids.add(backId[pos] < 0 ? unkId : backId[pos]);
       pos = start;
     }
-    final rev = ids.reversed.toList();
-    if (!addSpecial) return rev;
-    return [if (bosId != null) bosId!, ...rev, if (eosId != null) eosId!];
+    return ids.reversed.toList();
+  }
+
+  /// Encode [text] to token ids, wrapped per the `single` post-processor
+  /// template (`<s> … </s>`). `addSpecial: false` returns the bare piece ids.
+  List<int> encode(String text, {bool addSpecial = true}) {
+    final raw = _rawIds(text);
+    if (!addSpecial) return raw;
+    if (singleTpl != null) return applyTemplate(singleTpl!, raw, null).$1;
+    return [if (bosId != null) bosId!, ...raw, if (eosId != null) eosId!];
+  }
+
+  /// Encode a sentence pair for cross-encoders, following the `pair`
+  /// post-processor template (`<s> A </s></s> B </s>` for XLM-R). Returns the
+  /// token ids and matching `token_type_ids`.
+  (List<int>, List<int>) encodePair(String a, String b) {
+    final aIds = _rawIds(a), bIds = _rawIds(b);
+    if (pairTpl != null) return applyTemplate(pairTpl!, aIds, bIds);
+    final ids = [
+      if (bosId != null) bosId!,
+      ...aIds,
+      if (eosId != null) eosId!,
+      if (eosId != null) eosId!,
+      ...bIds,
+      if (eosId != null) eosId!
+    ];
+    return (ids, List<int>.filled(ids.length, 0));
   }
 
   List<String> tokens(String text, {bool addSpecial = true}) =>

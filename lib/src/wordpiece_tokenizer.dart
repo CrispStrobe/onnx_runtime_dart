@@ -10,6 +10,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'bert_strip_accents.dart';
+import 'token_template.dart';
 
 class WordPieceTokenizer {
   final Map<String, int> vocab;
@@ -20,9 +21,11 @@ class WordPieceTokenizer {
   final bool lowercase;
   final bool stripAccents;
   final int clsId, sepId;
+  final List<TemplateItem>? singleTpl, pairTpl; // post-processor templates
 
   WordPieceTokenizer._(this.vocab, this.idToToken, this.prefix, this.unk,
-      this.maxChars, this.lowercase, this.stripAccents, this.clsId, this.sepId);
+      this.maxChars, this.lowercase, this.stripAccents, this.clsId, this.sepId,
+      this.singleTpl, this.pairTpl);
 
   factory WordPieceTokenizer.fromFile(String path) {
     final j = jsonDecode(File(path).readAsStringSync()) as Map<String, dynamic>;
@@ -34,6 +37,13 @@ class WordPieceTokenizer {
     final lower = norm?['lowercase'] as bool? ?? true;
     // strip_accents defaults to the lowercase flag when null (BERT uncased).
     final strip = norm?['strip_accents'] as bool? ?? lower;
+    final pp = j['post_processor'];
+    final single = pp is Map<String, dynamic>
+        ? parseTemplate(pp['single'], (s) => vocab[s])
+        : null;
+    final pair = pp is Map<String, dynamic>
+        ? parseTemplate(pp['pair'], (s) => vocab[s])
+        : null;
     return WordPieceTokenizer._(
       vocab,
       idToToken,
@@ -44,6 +54,8 @@ class WordPieceTokenizer {
       strip,
       vocab['[CLS]'] ?? -1,
       vocab['[SEP]'] ?? -1,
+      single,
+      pair,
     );
   }
 
@@ -178,17 +190,40 @@ class WordPieceTokenizer {
     return out;
   }
 
-  /// Encode [text] to token ids, wrapped in `[CLS] … [SEP]` (BERT template).
-  List<int> encode(String text, {bool addSpecial = true}) {
+  /// Piece ids for [text] with no special tokens.
+  List<int> _rawIds(String text) {
     final ids = <int>[];
-    if (addSpecial && clsId >= 0) ids.add(clsId);
     for (final word in _normalizeAndSplit(text)) {
       for (final piece in _wordpiece(word)) {
         ids.add(vocab[piece] ?? vocab[unk]!);
       }
     }
-    if (addSpecial && sepId >= 0) ids.add(sepId);
     return ids;
+  }
+
+  /// Encode [text] to token ids, wrapped per the `single` post-processor
+  /// template (`[CLS] … [SEP]` for BERT). `addSpecial: false` returns the bare
+  /// piece ids.
+  List<int> encode(String text, {bool addSpecial = true}) {
+    final raw = _rawIds(text);
+    if (!addSpecial) return raw;
+    if (singleTpl != null) return applyTemplate(singleTpl!, raw, null).$1;
+    return [if (clsId >= 0) clsId, ...raw, if (sepId >= 0) sepId];
+  }
+
+  /// Encode a sentence pair (query, document) for cross-encoders, following the
+  /// `pair` post-processor template (`[CLS] A [SEP] B [SEP]`, segments 0/1 for
+  /// BERT). Returns the token ids and matching `token_type_ids`.
+  (List<int>, List<int>) encodePair(String a, String b) {
+    final aIds = _rawIds(a), bIds = _rawIds(b);
+    if (pairTpl != null) return applyTemplate(pairTpl!, aIds, bIds);
+    // Default BERT pair layout when no template is present.
+    final ids = [if (clsId >= 0) clsId, ...aIds, sepId, ...bIds, sepId];
+    final types = [
+      for (var i = 0; i < aIds.length + (clsId >= 0 ? 2 : 1); i++) 0,
+      for (var i = 0; i < bIds.length + 1; i++) 1,
+    ];
+    return (ids, types);
   }
 
   List<String> tokens(String text, {bool addSpecial = true}) =>

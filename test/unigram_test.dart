@@ -24,4 +24,12 @@ void main() {
   test('unknown character falls back to <unk>', () {
     expect(tok.encode('hz').contains(2), isTrue); // 'z' has no piece -> <unk>
   });
+
+  test('encodePair follows the XLM-R pair template', () {
+    // <s> ▁he </s></s> ▁wor ld </s>, all segment 0.
+    final (ids, types) = tok.encodePair('he', 'world');
+    expect(ids.map((i) => tok.idToPiece[i]).toList(),
+        ['<s>', '▁he', '</s>', '</s>', '▁wor', 'ld', '</s>']);
+    expect(types.every((t) => t == 0), isTrue);
+  });
 }

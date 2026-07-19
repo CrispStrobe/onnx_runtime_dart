@@ -242,11 +242,18 @@ models are usable with no external tokenizer — the same code runs on web/WASM:
 
 All three are validated for **exact** id-match against the reference
 `tokenizers` library (across cased/uncased, accented, CJK, Cyrillic, Greek and
-full-width text). Full **text → embedding** pipelines match
-`sentence-transformers` at **cosine 1.0** end-to-end (`tool/embed_e2e.dart`):
-WordPiece → all-MiniLM-L6, and Unigram → multilingual-e5-small (English,
-German, Japanese, Russian). `tool/llm_chat.dart` is the generative
-text-in/text-out counterpart.
+full-width text). They also do **sentence-pair** encoding (`encodePair`) for
+cross-encoders — following the `pair` post-processor template, returning both
+token ids and `token_type_ids` (BERT `[CLS] A [SEP] B [SEP]` segments 0/1,
+XLM-R `<s> A </s></s> B </s>`).
+
+Verified **end-to-end** at cosine 1.0 / reference-exact:
+- **text → embedding** — WordPiece → all-MiniLM-L6 and Unigram →
+  multilingual-e5-small (EN/DE/JA/RU) match `sentence-transformers`
+  (`tool/embed_e2e.dart`).
+- **cross-encoder reranking** — pair-tokenize → ms-marco-MiniLM-L6 relevance
+  logits match ORT within 2e-6 (`tool/rerank_e2e.dart`).
+- **generation** — `tool/llm_chat.dart` (BPE) is the text-in/text-out counterpart.
 
 ```dart
 final tok = WordPieceTokenizer.fromFile('tokenizer.json');
