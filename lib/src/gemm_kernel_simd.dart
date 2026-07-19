@@ -26,6 +26,15 @@ const int _panelBytes = 192 * 1024;
 /// offsets). `out` is assumed zero-initialized (fresh allocation).
 void matmulKernel(Float32List a, int aOff, Float32List b, int bOff,
     Float32List out, int outOff, int m, int k, int n) {
+  // Single-row GEMV (LLM decode: batch·seq == 1). The register-tiled path
+  // below packs a column panel of B before computing — worthwhile when many
+  // A-rows reuse it, but for one row that packing is pure overhead (B is read
+  // to pack, then read again to compute). Stream B once in register-held
+  // column tiles instead. Same k-order accumulation ⇒ bitwise identical.
+  if (m == 1) {
+    _gemv(a, aOff, b, bOff, out, outOff, k, n);
+    return;
+  }
   // Column-panel width: as many columns as keep k×panel×4 bytes under the
   // target, rounded up to a multiple of 4 (one Float32x4 lane); never wider
   // than n and at least 4.
@@ -156,6 +165,71 @@ void matmulKernel(Float32List a, int aOff, Float32List b, int bOff,
         storeLane(c, oRow + col, pw - col < 4 ? pw - col : 4);
       }
     }
+  }
+}
+
+/// `out[1×n] = a[1×k] · b[k×n]`, streaming B exactly once. Columns are
+/// processed in 16-wide tiles whose four `Float32x4` accumulators live in
+/// registers across the k loop, so each B element is read once (sequentially
+/// within a tile) and each output written once. Accumulation is in k order —
+/// bitwise identical to the register-tiled path.
+void _gemv(Float32List a, int aOff, Float32List b, int bOff, Float32List out,
+    int outOff, int k, int n) {
+  int j = 0;
+  for (; j + 16 <= n; j += 16) {
+    var c0 = Float32x4.zero(),
+        c1 = Float32x4.zero(),
+        c2 = Float32x4.zero(),
+        c3 = Float32x4.zero();
+    int br = bOff + j;
+    for (int kk = 0; kk < k; kk++) {
+      final va = Float32x4.splat(a[aOff + kk]);
+      c0 += va * Float32x4(b[br], b[br + 1], b[br + 2], b[br + 3]);
+      c1 += va * Float32x4(b[br + 4], b[br + 5], b[br + 6], b[br + 7]);
+      c2 += va * Float32x4(b[br + 8], b[br + 9], b[br + 10], b[br + 11]);
+      c3 += va * Float32x4(b[br + 12], b[br + 13], b[br + 14], b[br + 15]);
+      br += n;
+    }
+    final o = outOff + j;
+    out[o] = c0.x;
+    out[o + 1] = c0.y;
+    out[o + 2] = c0.z;
+    out[o + 3] = c0.w;
+    out[o + 4] = c1.x;
+    out[o + 5] = c1.y;
+    out[o + 6] = c1.z;
+    out[o + 7] = c1.w;
+    out[o + 8] = c2.x;
+    out[o + 9] = c2.y;
+    out[o + 10] = c2.z;
+    out[o + 11] = c2.w;
+    out[o + 12] = c3.x;
+    out[o + 13] = c3.y;
+    out[o + 14] = c3.z;
+    out[o + 15] = c3.w;
+  }
+  for (; j + 4 <= n; j += 4) {
+    var c0 = Float32x4.zero();
+    int br = bOff + j;
+    for (int kk = 0; kk < k; kk++) {
+      c0 += Float32x4.splat(a[aOff + kk]) *
+          Float32x4(b[br], b[br + 1], b[br + 2], b[br + 3]);
+      br += n;
+    }
+    final o = outOff + j;
+    out[o] = c0.x;
+    out[o + 1] = c0.y;
+    out[o + 2] = c0.z;
+    out[o + 3] = c0.w;
+  }
+  for (; j < n; j++) {
+    double acc = 0;
+    int br = bOff + j;
+    for (int kk = 0; kk < k; kk++) {
+      acc += a[aOff + kk] * b[br];
+      br += n;
+    }
+    out[outOff + j] = acc;
   }
 }
 

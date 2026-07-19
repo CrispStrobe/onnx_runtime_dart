@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.4.1
+
+- **~2.8× faster LLM decode.** The SIMD GEMM kernel now has a dedicated
+  single-row (`m == 1`) GEMV path. The register-tiled kernel packs a column
+  panel of B before computing — worthwhile when many A-rows reuse it, but for
+  the one row of an autoregressive decode step that packing is pure overhead
+  (B is read to pack, then read again to compute). The GEMV path streams B
+  exactly once through register-held 16-wide column tiles. Measured on
+  Qwen2.5-0.5B: decode 1154 → 407 ms/step (kernel-time −67%); SmolLM2 24-step
+  greedy generation 7.3 → 3.7 s, still **token-for-token identical to ORT**.
+  Accumulation stays in k-order, so column-partitioned isolate runs remain
+  self-consistent and ORT parity is unchanged (Qwen decode cosine 0.99999976).
+
 ## 0.4.0
 
 - **`OnnxModel.inputSpecs` / `outputNames` + `TensorSpec`** — introspect a
