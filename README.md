@@ -52,6 +52,7 @@ linked).
 | ms-marco-MiniLM-L-6-v2 `†` | `cross-encoder/ms-marco-MiniLM-L-6-v2` | BERT cross-encoder | 1.0 |
 | mxbai-rerank-xsmall-v1 | `mixedbread-ai/mxbai-rerank-xsmall-v1` | DeBERTa-v2, disentangled attention | 1.0 |
 | mxbai-rerank-base-v1 | `mixedbread-ai/mxbai-rerank-base-v1` | DeBERTa-v2 | 1.0 |
+| awesome-align | `cstr/awesome-align-onnx` | multilingual BERT word aligner | 1.0 |
 | F2LLM-v2-0.6B `†` | `cstr/F2LLM-v2-0.6B-ONNX` | Qwen3 decoder | int8 dynamic-quant band (0.997) |
 | jina-embeddings-v5-small `†` | `jinaai/jina-embeddings-v5-text-small-retrieval` | Qwen3, `IsNaN` attention masking | 1.0 (fp16 export) |
 | partitura-jina `†` | jina variant (local export) | BERT/jina | 1.0 |
@@ -62,6 +63,7 @@ linked).
 |---|---|---|---|
 | Octen-0.6B int4 `†` | `cstr/Octen-Embedding-0.6B-ONNX` | `MatMulNBits`, 1.8 GB packed | cosine 1.0 (static block quant) |
 | llama-nemotron-rerank-1B int4 `†` | `cstr/llama-nemotron-rerank-1b-v2-ONNX` | `MatMulNBits` | logit within 1.7e-5 |
+| llama-nemotron-rerank-1B int8 `†` | `cstr/nemotron` int8 (local) | dynamic quant | dynamic-int8 band |
 | Octen-0.6B int8 `†` | `cstr/Octen-Embedding-0.6B-ONNX` | dynamic quant, 196 `MatMulInteger` | intrinsic-band (below) |
 | zerank-1-small int4 `†` | `cstr/zerank-1-small-ONNX` | int4 + **fp16-compute** regions | fp16-caveat (below) |
 | PIXIE-Rune-v1.0 int4 | `cstr/PIXIE-Rune-v1.0-ONNX` | XLM-R, **ONNX-native INT4** QDQ (packed 2/byte) | cosine 1.0 |
