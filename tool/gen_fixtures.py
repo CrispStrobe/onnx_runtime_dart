@@ -854,6 +854,27 @@ def main():
                        "sinc": np.sin(rpos).astype(np.float32)},
          n_outputs=3, ms_domain=True)
 
+    # GQA with a populated cache AND an additive attention_bias (input 10):
+    # the per-head bias now strides over the full total-sequence width, the
+    # one bias+cache combination the other fixtures don't cover. Bias is small
+    # and additive (not a mask) so the additive path is checked cleanly on top
+    # of the always-on causal mask. Shape [B, NH, S, past+S].
+    emit("gqa_kvcache_bias",
+         [helper.make_node("GroupQueryAttention",
+                           ["q", "k", "v", "past_key", "past_value",
+                            "seqlens", "total", "", "", "", "bias"],
+                           ["out0", "out1", "out2"],
+                           num_heads=NH, kv_num_heads=KVh,
+                           domain="com.microsoft")],
+         {"q": f32(B, Sq, NH * hsg), "k": f32(B, Sq, KVh * hsg),
+          "v": f32(B, Sq, KVh * hsg),
+          "past_key": f32(B, KVh, Pk, hsg), "past_value": f32(B, KVh, Pk, hsg)},
+         initializers={"seqlens": np.array([Pk + Sq - 1], dtype=np.int32),
+                       "total": np.array(Pk + Sq, dtype=np.int32),
+                       "bias": (RNG.standard_normal((B, NH, Sq, Pk + Sq)) * 0.1)
+                       .astype(np.float32)},
+         n_outputs=3, ms_domain=True)
+
     # RotaryEmbedding: input [B,S,NH*hs], non-interleaved, full-head rotation.
     maxpos = 16
     ang = (np.arange(hs // 2) / (hs // 2)).astype(np.float32)
