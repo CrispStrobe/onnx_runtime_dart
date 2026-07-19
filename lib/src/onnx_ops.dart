@@ -1032,6 +1032,34 @@ List<Tensor> opSplit(Tensor x, int axis, int numOutputs,
   return outs;
 }
 
+/// GLU gate — the fused form of `Split`-in-half + `Sigmoid(second)` +
+/// `Mul(first, ·)`: splits [x] in half along [axis] into `(a, b)` and returns
+/// `a * sigmoid(b)` in one pass (one memory read/write instead of three).
+/// Bitwise identical to the decomposition (same `1/(1+exp(-x))` sigmoid).
+Tensor opGlu(Tensor x, int axis) {
+  final rank = x.rank;
+  final ax = axis < 0 ? axis + rank : axis;
+  final axisSize = x.shape[ax];
+  final half = axisSize ~/ 2;
+  final inner = x.shape.sublist(ax + 1).fold<int>(1, (a, b) => a * b);
+  final outer = x.shape.sublist(0, ax).fold<int>(1, (a, b) => a * b);
+  final xf = x.f ?? x.asFloatList();
+  final out = Float32List(outer * half * inner);
+  for (int o = 0; o < outer; o++) {
+    for (int h = 0; h < half; h++) {
+      final aBase = (o * axisSize + h) * inner;
+      final bBase = (o * axisSize + half + h) * inner;
+      final oBase = (o * half + h) * inner;
+      for (int i = 0; i < inner; i++) {
+        // s = Sigmoid(b) then a * s — matches the decomposed op bit-for-bit.
+        final s = 1.0 / (1.0 + math.exp(-xf[bBase + i]));
+        out[oBase + i] = xf[aBase + i] * s;
+      }
+    }
+  }
+  return Tensor.float(out, [...x.shape]..[ax] = half);
+}
+
 /// `STFT` (opset 17) — real input only, frame-major output
 /// `[batch, frames, bins, 2]` (re/im). No centering or padding: frames start
 /// at multiples of [frameStep] and must fit entirely inside the signal (the

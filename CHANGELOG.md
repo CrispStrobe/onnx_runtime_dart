@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.10.1
+
+- **GLU fusion.** `Split`-in-half → `Sigmoid(second)` → `Mul(first, ·)` (the
+  gated-linear-unit activation conv nets like Demucs use heavily) now fuses to a
+  single `_FusedGlu` op — one pass over the (often large) channel tensor instead
+  of three, bitwise-identical to the decomposition. New `glu_gate` ORT-parity
+  fixture. Measured on htdemucs (48 GLUs): correctness held at max|Δ| ~5e-7 vs
+  onnxruntime end-to-end.
+
 ## 0.10.0
 
 - **Max-length truncation for all tokenizers** — the production gap for long

@@ -234,6 +234,42 @@ class OnnxGraphExecutor {
         ..output.add(mul2.output[0]);
     }
 
+    // GLU: Split(x, axis) -> [a, b]; Sigmoid(b) -> s; Mul(a, s) -> out, i.e.
+    // `a * sigmoid(b)`, the gated activation Demucs (and many conv nets) use ~48
+    // times. Each is three full passes over a large channel tensor — fuse to
+    // one (`_FusedGlu`).
+    for (final split in nodes) {
+      if (split.opType != 'Split' || split.output.length != 2) continue;
+      // Must be an equal 2-way split (GLU halves the axis).
+      final splitAttrs = _AttrMap(split.attribute, _ext);
+      final axis = splitAttrs.getInt('axis') ?? 0;
+      final sizes = splitAttrs.getInts('split') ??
+          (split.input.length > 1
+              ? _initializers[split.input[1]]?.asIntList()
+              : null);
+      if (sizes != null && (sizes.length != 2 || sizes[0] != sizes[1])) {
+        continue;
+      }
+      final a = split.output[0], b = split.output[1];
+      final sig = soleConsumer(b);
+      if (sig == null || sig.opType != 'Sigmoid' || uses[b] != 1) continue;
+      final mul = soleConsumer(sig.output[0]);
+      if (mul == null || mul.opType != 'Mul') continue;
+      final other =
+          mul.input[0] == sig.output[0] ? mul.input[1] : mul.input[0];
+      if (other != a || uses[a] != 1) continue;
+
+      removed.addAll([split, sig]);
+      replaceAt[mul] = NodeProto()
+        ..opType = '_FusedGlu'
+        ..name = 'fused_glu_${mul.output[0]}'
+        ..input.add(split.input[0])
+        ..output.add(mul.output[0])
+        ..attribute.add(AttributeProto()
+          ..name = 'axis'
+          ..i = Int64(axis));
+    }
+
     // RMSNorm: x -> Pow(2) -> ReduceMean(axis) -> Add(eps) -> Sqrt ->
     // Reciprocal -> Mul(x) -> Mul(gamma). Qwen-style transformers and Maia3
     // carry 16-113 of these chains.
@@ -932,6 +968,8 @@ class OnnxGraphExecutor {
         return [_sliceLastSeq(need(0))];
       case '_FusedGelu':
         return [ops.opGelu(need(0))];
+      case '_FusedGlu':
+        return [ops.opGlu(need(0), attrs.getInt('axis') ?? 0)];
       case '_FusedRMSNorm':
         return [
           ops.opRMSNorm(need(0), need(1), attrs.getInt('axis')!,

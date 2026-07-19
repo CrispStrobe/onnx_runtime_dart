@@ -1037,6 +1037,15 @@ def main():
          initializers={"s0": np.zeros(2, dtype=np.float32)},
          n_outputs=2)
 
+    # GLU: Split-in-half + Sigmoid(second half) + Mul(first, ·) — the gate
+    # Demucs uses ~48x; fuses to _FusedGlu, must stay bit-identical.
+    emit("glu_gate",
+         [helper.make_node("Split", ["x"], ["a", "b"], axis=1,
+                           num_outputs=2),
+          helper.make_node("Sigmoid", ["b"], ["s"]),
+          helper.make_node("Mul", ["a", "s"], ["out0"])],
+         {"x": f32(2, 8, 5)}, opset=18)
+
     print("fixtures written to", FIXTURES)
 
 
