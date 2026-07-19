@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.4.2
+
+- **Another ~1.9× on LLM decode (≈5× total vs 0.3.x).** The single-row GEMV
+  path now reads B through a `Float32x4List` view — one vector load per lane
+  instead of the four scalar loads the `Float32x4(a,b,c,d)` constructor
+  compiles to — whenever `n` is a multiple of 4 and B's base is 16-byte
+  aligned (the common case for transformer weight matrices). Bitwise identical
+  (the view yields the same four floats; verified max|Δ|=0), with a scalar
+  fallback for any odd width or unaligned isolate-worker slice. Qwen2.5-0.5B
+  decode 407 → 229 ms/step; SmolLM2 24-step greedy generation 3.7 → 2.3 s,
+  still token-for-token identical to ORT. ORT parity unchanged.
+- Investigated fp16 weight *storage* (halve memory traffic via in-kernel
+  upcast) and measured it a net loss in pure Dart — the non-vectorizable
+  `fp16→fp32` conversion costs more than the bandwidth saved — so it was not
+  adopted. The vector-load win above is the better lever.
+
 ## 0.4.1
 
 - **~2.8× faster LLM decode.** The SIMD GEMM kernel now has a dedicated
