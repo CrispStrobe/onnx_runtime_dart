@@ -8,6 +8,26 @@
   are now parsed at runtime — exact on the VM, the nearest double on the web
   (only used when saturating a non-finite Cast, so harmless). Restores web
   (dart2js) compilation.
+- **Fused transformer ops (`com.microsoft`):** `MultiHeadAttention`,
+  `RotaryEmbedding` (interleaved + rotate-half, partial rotation),
+  `SimplifiedLayerNormalization` / `SkipSimplifiedLayerNormalization`
+  (RMSNorm) — so onnx-community / Optimum-optimized exports that fuse
+  attention run directly. New ops: `LogSoftmax`, `IsNaN`, `IsInf`, `Sign`,
+  `Atan`, `RandomNormalLike`.
+- **Loader:** ONNX-native INT4 (dtype 22) / UINT4 (21) weights (packed
+  2/byte); external-data entries with `length: 0` fall back to the
+  shape-derived byte count (some Optimum fp16 exports); malformed-protobuf
+  and short/oversized-tensor inputs reject with clear errors.
+- **Performance:** cache-blocked GEMM kernel — a column-panel outer loop
+  keeps the packed B slice in L2 instead of re-streaming it per A-row tile
+  (2.3× on large-k matmuls / pointwise convs, e.g. ECAPA-TDNN 20.5 → 9.0 s;
+  small-k transformers unaffected; bitwise-identical). `Softmax`/`LayerNorm`
+  hot loops use direct float-buffer access; 1-D `Conv` joins the isolate-pool
+  conv fan-out.
+- **Newly verified live vs native ORT:** embeddinggemma-300m (Gemma3),
+  FastConformer CTC, ECAPA-TDNN, Piper VITS TTS, PIXIE-Rune int4
+  (ONNX-native INT4), jina-embeddings-v5-small, F2LLM-v2-0.6B,
+  CrispTranslator (int8 NLLB), awesome-align, partitura-jina.
 
 ## 0.3.4
 
