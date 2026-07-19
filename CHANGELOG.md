@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.7.0
+
+- **`UnigramTokenizer` — the multilingual embedder family, in pure Dart.**
+  SentencePiece Unigram (the `Unigram` model in a `tokenizer.json`): `Metaspace`
+  pre-tokenization, Viterbi segmentation over the vocab log-probs, and
+  `<s>…</s>` templating, covering XLM-RoBERTa models (multilingual-e5 / bge-m3 /
+  paraphrase-multilingual …). SentencePiece's `Precompiled` NFKC normalizer —
+  a 300 KB binary charsmap — is approximated by a per-codepoint NFKC
+  compatibility fold (`nfkc_compat.dart`: full-width forms, ligatures,
+  fractions, circled numbers) plus whitespace collapsing. Exact id-match vs the
+  reference `tokenizers` library on NFC-normalized text across scripts (English,
+  German, accented French, Japanese, Russian, Greek, full-width). The one
+  unhandled case is base+combining *composition* (feed NFC text); byte-fallback
+  vocabs aren't supported.
+
 ## 0.6.0
 
 - **Pure-Dart tokenizers — end-to-end text models with no external dependency.**

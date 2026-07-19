@@ -232,15 +232,20 @@ models are usable with no external tokenizer — the same code runs on web/WASM:
   incl. accent-stripping via a precomputed NFD table, `BertPreTokenizer`, greedy
   `##` continuation, `[CLS]…[SEP]`). Covers the whole embedder/reranker family
   (BERT / MiniLM / MPNet / GTE / E5 / mxbai …).
+- **`UnigramTokenizer`** — SentencePiece Unigram (`Metaspace` + Viterbi over
+  the vocab log-probs + `<s>…</s>`), with the `Precompiled` NFKC normalizer
+  approximated by a per-codepoint compatibility fold. Covers the multilingual
+  XLM-RoBERTa family (multilingual-e5 / bge-m3 / paraphrase-multilingual …).
 - **`BpeTokenizer`** — byte-level BPE (GPT-2 / Qwen / Llama-BPE): the GPT-2
   pre-tokenization regex, `bytes_to_unicode`, rank-ordered merges, added/special
   tokens. Drives the generative decoders.
 
-Both are validated for **exact** id-match against the reference `tokenizers`
-library. A full **text → embedding** pipeline (WordPiece → ONNX → masked
-mean-pool → L2-normalize) matches `sentence-transformers` at cosine 1.0,
-including accented and CJK text (`tool/embed_e2e.dart`); `tool/llm_chat.dart`
-is the generative text-in/text-out counterpart.
+All three are validated for **exact** id-match against the reference
+`tokenizers` library (WordPiece and Unigram across accented, CJK, Cyrillic,
+Greek and full-width text). A full **text → embedding** pipeline (WordPiece →
+ONNX → masked mean-pool → L2-normalize) matches `sentence-transformers` at
+cosine 1.0 (`tool/embed_e2e.dart`); `tool/llm_chat.dart` is the generative
+text-in/text-out counterpart.
 
 ```dart
 final tok = WordPieceTokenizer.fromFile('tokenizer.json');
