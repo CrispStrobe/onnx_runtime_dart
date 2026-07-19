@@ -1145,24 +1145,48 @@ Tensor opSoftmax(Tensor x, int axis) {
   final innerSize = x.shape.sublist(ax + 1).fold<int>(1, (a, b) => a * b);
 
   final out = Float32List(x.length);
-  for (int outer = 0; outer < outerSize; outer++) {
-    for (int inner = 0; inner < innerSize; inner++) {
+  final xf = x.f ?? x.asFloatList(); // attention scores are always float
+  // Contiguous last-axis softmax (the overwhelmingly common case: attention
+  // rows, classifier heads) — walk each row linearly instead of striding.
+  if (innerSize == 1) {
+    final rows = x.length ~/ axisSize;
+    for (int r = 0; r < rows; r++) {
+      final base = r * axisSize;
       double maxV = double.negativeInfinity;
       for (int a = 0; a < axisSize; a++) {
-        final idx = outer * axisSize * innerSize + a * innerSize + inner;
-        final v = x.getD(idx);
+        final v = xf[base + a];
         if (v > maxV) maxV = v;
       }
       double sum = 0;
       for (int a = 0; a < axisSize; a++) {
-        final idx = outer * axisSize * innerSize + a * innerSize + inner;
-        final e = math.exp(x.getD(idx) - maxV);
-        out[idx] = e;
+        final e = math.exp(xf[base + a] - maxV);
+        out[base + a] = e;
         sum += e;
       }
+      final inv = 1.0 / sum;
       for (int a = 0; a < axisSize; a++) {
-        final idx = outer * axisSize * innerSize + a * innerSize + inner;
-        out[idx] = out[idx] / sum;
+        out[base + a] *= inv;
+      }
+    }
+    return Tensor.float(out, x.shape);
+  }
+  for (int outer = 0; outer < outerSize; outer++) {
+    for (int inner = 0; inner < innerSize; inner++) {
+      final b0 = outer * axisSize * innerSize + inner;
+      double maxV = double.negativeInfinity;
+      for (int a = 0; a < axisSize; a++) {
+        final v = xf[b0 + a * innerSize];
+        if (v > maxV) maxV = v;
+      }
+      double sum = 0;
+      for (int a = 0; a < axisSize; a++) {
+        final e = math.exp(xf[b0 + a * innerSize] - maxV);
+        out[b0 + a * innerSize] = e;
+        sum += e;
+      }
+      final inv = 1.0 / sum;
+      for (int a = 0; a < axisSize; a++) {
+        out[b0 + a * innerSize] *= inv;
       }
     }
   }
@@ -1211,23 +1235,26 @@ Tensor opLayerNormalization(
   final normSize = x.shape.sublist(ax).fold<int>(1, (a, b) => a * b);
 
   final out = Float32List(x.length);
+  // LayerNorm inputs are always float; direct-index the backing buffer to
+  // skip getD's per-element dtype branch (this runs per token per layer).
+  final xf = x.f ?? x.asFloatList();
+  final sf = scale.asFloatList(), bf = bias.asFloatList();
   for (int outer = 0; outer < outerSize; outer++) {
     final base = outer * normSize;
     double mean = 0;
     for (int k = 0; k < normSize; k++) {
-      mean += x.getD(base + k);
+      mean += xf[base + k];
     }
     mean /= normSize;
     double variance = 0;
     for (int k = 0; k < normSize; k++) {
-      final d = x.getD(base + k) - mean;
+      final d = xf[base + k] - mean;
       variance += d * d;
     }
     variance /= normSize;
     final invStd = 1.0 / math.sqrt(variance + epsilon);
     for (int k = 0; k < normSize; k++) {
-      final normalized = (x.getD(base + k) - mean) * invStd;
-      out[base + k] = normalized * scale.getD(k) + bias.getD(k);
+      out[base + k] = (xf[base + k] - mean) * invStd * sf[k] + bf[k];
     }
   }
   return Tensor.float(out, x.shape);

@@ -52,6 +52,23 @@ GEMM efficiency rises with N (m = 64·N rows per matmul).
 
 Remaining profile: Conv 69% (genuine GEMM work, ~15-20 GMAC per run).
 
+## GEMM cache-blocking (large-k matmuls / pointwise convs)
+
+Controlled A/B (old single-panel vs new column-panel kernel, back-to-back on
+the same machine so load cancels), ECAPA-TDNN (81 MB, dominated by
+`3072×3072` and `1024×1024` pointwise convs):
+
+| kernel | ECAPA min wall |
+|---|---|
+| single-panel (packs all of B once, re-streams it per A-row tile) | 20.5 s |
+| column-panel (keeps a ~192 KB k×panel slice of B in L2) | 9.0 s — **2.3×** |
+
+Accumulation order is unchanged, so results stay bitwise identical (pool
+bitwise tests + all live models pass). Small-k matmuls (transformers) are
+unaffected — one panel covers all columns, so the path is identical to
+before. `Softmax`/`LayerNorm` inner loops also switched from the
+dtype-branching `getD()` to direct float-buffer access.
+
 ## Vision models (224×224, batch 1, cosine-1.0 parity vs ORT throughout)
 
 | Date | Change | MobileNetV2 | ResNet18 |
