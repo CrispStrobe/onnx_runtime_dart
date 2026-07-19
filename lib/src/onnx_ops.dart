@@ -1745,6 +1745,15 @@ Tensor opWhere(Tensor cond, Tensor a, Tensor b) {
 /// `Size` — total element count as an int64 scalar.
 Tensor opSize(Tensor x) => Tensor.scalarInt(x.length);
 
+/// `RandomNormalLike` / `RandomNormal` — a Gaussian-noise tensor. A
+/// pseudo-random draw can never match ORT's Mersenne-Twister stream across
+/// implementations, so this returns the distribution *mean* (a deterministic
+/// fill). That is exact for the only parity-testable case — models that scale
+/// the noise to zero (e.g. VITS/Piper with `noise_scale = 0`) — and finite
+/// otherwise. Genuinely stochastic sampling is not reproduced.
+Tensor opRandomNormalFill(List<int> shape, double mean) =>
+    Tensor.filledFloat(shape, mean);
+
 /// `ArgMax` / `ArgMin` along [axis]; ties resolve to the first (or, with
 /// [selectLastIndex], the last) occurrence.
 Tensor opArgMinMax(Tensor x, int axis, bool keepdims,

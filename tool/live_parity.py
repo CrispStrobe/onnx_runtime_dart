@@ -54,6 +54,12 @@ def main():
             feed[inp.name] = np.array(16000, dtype=np.int64)
         elif inp.name == "speed" and inp.type == "tensor(float)":
             feed[inp.name] = np.ones(dims, dtype=np.float32)
+        elif inp.name == "scales" and inp.type == "tensor(float)":
+            # VITS/Piper [noise, length, noise_w]: zero the noise so the
+            # RandomNormalLike contributions cancel -> deterministic output.
+            feed[inp.name] = np.array([0.0, 1.0, 0.0], dtype=np.float32)[:dims[0]]
+        elif inp.name == "sid" and inp.type == "tensor(int64)":
+            feed[inp.name] = np.zeros(dims, dtype=np.int64)
         elif "size" in inp.name.lower() and inp.type == "tensor(float)":
             # image-size vectors (SAM's orig_im_size): plausible dimensions
             feed[inp.name] = np.full(dims, 512, dtype=np.float32)

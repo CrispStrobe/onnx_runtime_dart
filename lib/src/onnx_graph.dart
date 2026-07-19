@@ -1290,6 +1290,15 @@ class OnnxGraphExecutor {
         return [ops.opPRelu(need(0), need(1))];
       case 'Size':
         return [ops.opSize(need(0))];
+      case 'RandomNormalLike':
+        return [
+          ops.opRandomNormalFill(need(0).shape, attrs.getFloat('mean') ?? 0.0)
+        ];
+      case 'RandomNormal':
+        return [
+          ops.opRandomNormalFill(
+              attrs.getInts('shape')!, attrs.getFloat('mean') ?? 0.0)
+        ];
       case 'Tile':
         return [ops.opTile(need(0), need(1).asIntList().toList())];
       case 'NonZero':

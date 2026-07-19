@@ -21,6 +21,8 @@ const int _kInt64 = 7;
 const int _kBool = 9;
 const int _kFloat16 = 10;
 const int _kDouble = 11;
+const int _kUint4 = 21;
+const int _kInt4 = 22;
 
 /// Expands an IEEE-754 half-precision bit pattern [h] to the bit pattern of the
 /// equivalent float32 (so fp16 weights can be widened without `dart:math`).
@@ -238,6 +240,25 @@ Tensor tensorFromProto(TensorProto t, {ExternalDataResolver? ext}) {
     return signed
         ? Tensor.int8(Int8List.sublistView(bytes, 0, n), shape)
         : Tensor.uint8(Uint8List.sublistView(bytes, 0, n), shape);
+  } else if (t.dataType == _kInt4 || t.dataType == _kUint4) {
+    // ONNX-native 4-bit ints: two values per byte, first element in the low
+    // nibble. Unpacked to our compact 1-byte int8/uint8 storage (values fit).
+    final signed = t.dataType == _kInt4;
+    final bytes = _rawBytes(t, ext, (n + 1) ~/ 2);
+    _needRawLen(t, bytes.length * 2, n, 1);
+    if (signed) {
+      final out = Int8List(n);
+      for (int i = 0; i < n; i++) {
+        final nib = (i & 1) == 0 ? bytes[i >> 1] & 0xF : bytes[i >> 1] >> 4;
+        out[i] = nib > 7 ? nib - 16 : nib; // sign-extend
+      }
+      return Tensor.int8(out, shape);
+    }
+    final out = Uint8List(n);
+    for (int i = 0; i < n; i++) {
+      out[i] = (i & 1) == 0 ? bytes[i >> 1] & 0xF : bytes[i >> 1] >> 4;
+    }
+    return Tensor.uint8(out, shape);
   } else if (t.dataType == _kBool) {
     // BOOL is one byte per element, carried as int64 0/1.
     final bytes = _rawBytes(t, ext, n * 1);

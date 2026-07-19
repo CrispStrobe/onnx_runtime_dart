@@ -64,6 +64,7 @@ linked).
 | llama-nemotron-rerank-1B int4 `†` | `cstr/llama-nemotron-rerank-1b-v2-ONNX` | `MatMulNBits` | logit within 1.7e-5 |
 | Octen-0.6B int8 `†` | `cstr/Octen-Embedding-0.6B-ONNX` | dynamic quant, 196 `MatMulInteger` | intrinsic-band (below) |
 | zerank-1-small int4 `†` | `cstr/zerank-1-small-ONNX` | int4 + **fp16-compute** regions | fp16-caveat (below) |
+| PIXIE-Rune-v1.0 int4 | `cstr/PIXIE-Rune-v1.0-ONNX` | XLM-R, **ONNX-native INT4** QDQ (packed 2/byte) | cosine 1.0 |
 
 ### Sequence-to-sequence & OCR
 
@@ -102,6 +103,7 @@ linked).
 | CosyVoice3 speech tokenizer `†` | CosyVoice3 (`speech_tokenizer_v3.onnx`) | discrete speech tokens | **25/25 tokens exactly equal** |
 | FastConformer CTC `†` | NeMo FastConformer (local ONNX export) | Conformer + CTC, `LogSoftmax` | 1.0 |
 | ECAPA-TDNN language-ID `†` | SpeechBrain ECAPA-TDNN (local ONNX export) | SE-Res2 TDNN, attentive stat pooling | 1.0 |
+| Piper (VITS) TTS `†` | rhasspy/piper voices (e.g. `en_US-libritts_r-medium`) | end-to-end VITS, `RandomNormalLike` | 1.0 (noise-scale 0 → deterministic) |
 
 ### Games
 
