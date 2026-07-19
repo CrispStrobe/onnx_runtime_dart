@@ -1,13 +1,7 @@
 # Changelog
 
-## 0.3.5
+## 0.3.6
 
-- **Web build fix:** the float→int Cast saturation added in 0.3.4 used 64-bit
-  integer literals (`0x7FFFFFFFFFFFFFFF` / `-0x8000000000000000`), which are a
-  compile error under dart2js (on the web `int` is a 53-bit double). The bounds
-  are now parsed at runtime — exact on the VM, the nearest double on the web
-  (only used when saturating a non-finite Cast, so harmless). Restores web
-  (dart2js) compilation.
 - **Fused transformer ops (`com.microsoft`):** `MultiHeadAttention`,
   `RotaryEmbedding` (interleaved + rotate-half, partial rotation),
   `SimplifiedLayerNormalization` / `SkipSimplifiedLayerNormalization`
@@ -28,6 +22,15 @@
   FastConformer CTC, ECAPA-TDNN, Piper VITS TTS, PIXIE-Rune int4
   (ONNX-native INT4), jina-embeddings-v5-small, F2LLM-v2-0.6B,
   CrispTranslator (int8 NLLB), awesome-align, partitura-jina.
+
+## 0.3.5
+
+- **Web build fix:** the float→int Cast saturation added in 0.3.4 used 64-bit
+  integer literals (`0x7FFFFFFFFFFFFFFF` / `-0x8000000000000000`), which are a
+  compile error under dart2js (on the web `int` is a 53-bit double). The bounds
+  are now parsed at runtime — exact on the VM, the nearest double on the web
+  (only used when saturating a non-finite Cast, so harmless). Restores web
+  (dart2js) compilation.
 
 ## 0.3.4
 
