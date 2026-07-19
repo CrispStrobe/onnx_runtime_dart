@@ -54,6 +54,7 @@ linked).
 | mxbai-rerank-base-v1 | `mixedbread-ai/mxbai-rerank-base-v1` | DeBERTa-v2 | 1.0 |
 | awesome-align | `cstr/awesome-align-onnx` | multilingual BERT word aligner | 1.0 |
 | embeddinggemma-300m | `onnx-community/embeddinggemma-300m-ONNX` | **Gemma3**; fused `MultiHeadAttention` + `RotaryEmbedding` + `SimplifiedLayerNormalization` | 1.0 (fp16 export) |
+| harrier-270m | `onnx-community/harrier-oss-v1-270m-ONNX` | **Gemma3** decoder; fused **`GroupQueryAttention`** (causal, internal RoPE, GQA grouping) | 1.0 (fp16 export) |
 | F2LLM-v2-0.6B `†` | `cstr/F2LLM-v2-0.6B-ONNX` | Qwen3 decoder | int8 dynamic-quant band (0.997) |
 | jina-embeddings-v5-small `†` | `jinaai/jina-embeddings-v5-text-small-retrieval` | Qwen3, `IsNaN` attention masking | 1.0 (fp16 export) |
 | partitura-jina `†` | jina variant (local export) | BERT/jina | 1.0 |
@@ -214,7 +215,9 @@ self-contained, runnable graph built with the protobuf types.
   `Einsum` (general 1/2-operand equations without ellipsis; the transformer-
   hot patterns keep specialized kernels), `ArgMax`, `ArgMin`, `LogSoftmax`.
 - **Fused transformer ops (`com.microsoft`):** `MultiHeadAttention`,
-  `RotaryEmbedding` (interleaved + rotate-half, partial-rotation),
+  `GroupQueryAttention` (causal, grouped KV heads, internal RoPE — the
+  fused op modern LLM exports use: Llama3 / Qwen2-3 / Gemma2-3 / Phi3 /
+  Mistral), `RotaryEmbedding` (interleaved + rotate-half, partial-rotation),
   `SimplifiedLayerNormalization` / `SkipSimplifiedLayerNormalization`
   (RMSNorm) — so onnx-community / Optimum-optimized transformer exports
   (which fuse attention rather than emitting decomposed graphs) run directly.

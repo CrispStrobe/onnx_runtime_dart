@@ -797,6 +797,20 @@ def main():
                            num_heads=NH, domain="com.microsoft")],
          {"q": f32(B, Sq, Hid), "k": f32(B, Sq, Hid), "v": f32(B, Sq, Hid)},
          ms_domain=True)
+    # GroupQueryAttention (causal, GQA grouping). seqlens_k is the last-token
+    # position (S-1) for the no-KV-cache case; total_sequence_length = S.
+    KVh, hsg = 2, 8  # GQA requires head_size % 8 == 0
+    emit("gqa_causal",
+         [helper.make_node("GroupQueryAttention",
+                           ["q", "k", "v", "", "", "seqlens", "total"],
+                           ["out0", "pk", "pv"], num_heads=NH,
+                           kv_num_heads=KVh, domain="com.microsoft")],
+         {"q": f32(B, Sq, NH * hsg), "k": f32(B, Sq, KVh * hsg),
+          "v": f32(B, Sq, KVh * hsg)},
+         initializers={"seqlens": np.array([Sq - 1], dtype=np.int32),
+                       "total": np.array(Sq, dtype=np.int32)},
+         n_outputs=1, ms_domain=True)
+
     # RotaryEmbedding: input [B,S,NH*hs], non-interleaved, full-head rotation.
     maxpos = 16
     ang = (np.arange(hs // 2) / (hs // 2)).astype(np.float32)

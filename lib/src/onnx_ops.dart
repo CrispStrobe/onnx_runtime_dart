@@ -1383,6 +1383,114 @@ Tensor opRMSNorm(Tensor x, Tensor gamma, int axis, double eps) {
   return Tensor.float(out, x.shape);
 }
 
+/// `GroupQueryAttention` (com.microsoft) — grouped-query attention over
+/// already-projected `[batch, seq, *]` Q/K/V, the fused op most modern LLM
+/// exports use (Llama3 / Qwen2 / Gemma3). [numHeads] query heads share
+/// [kvNumHeads] KV heads (each query head `h` attends to KV head
+/// `h ~/ (numHeads/kvNumHeads)`). When [doRotary], RoPE is applied to Q and K
+/// inside the op from [cosCache]/[sinCache] at positions `0..seq-1` (no KV
+/// cache supported here). [attentionBias] is the additive mask (typically the
+/// causal mask). `softcap` and `local_window` are not supported.
+Tensor opGroupQueryAttention(Tensor q, Tensor k, Tensor v,
+    {required int numHeads,
+    required int kvNumHeads,
+    double? scale,
+    bool doRotary = false,
+    bool rotaryInterleaved = false,
+    Tensor? cosCache,
+    Tensor? sinCache,
+    Tensor? attentionBias,
+    double softcap = 0,
+    int localWindow = -1}) {
+  if (softcap != 0 || localWindow > 0) {
+    throw UnsupportedError(
+        'GroupQueryAttention: softcap / local_window not supported');
+  }
+  final batch = q.shape[0], seq = q.shape[1];
+  final headSize = q.shape[2] ~/ numHeads;
+  final group = numHeads ~/ kvNumHeads;
+
+  var qq = q, kk = k;
+  if (doRotary) {
+    final pos = Tensor.int64(
+        Int64List.fromList([for (int s = 0; s < seq; s++) s]), [1, seq]);
+    qq = opRotaryEmbedding(q, pos, cosCache!, sinCache!,
+        interleaved: rotaryInterleaved, numHeads: numHeads);
+    kk = opRotaryEmbedding(k, pos, cosCache, sinCache,
+        interleaved: rotaryInterleaved, numHeads: kvNumHeads);
+  }
+  final s = scale ?? (1.0 / math.sqrt(headSize));
+  final qf = qq.f!, kf = kk.f!, vf = v.f ?? v.asFloatList();
+  final bias = attentionBias?.asFloatList();
+  final biasHeads = attentionBias == null ? 0 : attentionBias.shape[1];
+  final kvHidden = kvNumHeads * headSize;
+
+  final out = Float32List(batch * seq * numHeads * headSize);
+  final qh = Float32List(seq * headSize);
+  final kt = Float32List(headSize * seq);
+  final vh = Float32List(seq * headSize);
+  final scores = Float32List(seq * seq);
+  final ctx = Float32List(seq * headSize);
+
+  for (int b = 0; b < batch; b++) {
+    for (int h = 0; h < numHeads; h++) {
+      final kvh = h ~/ group;
+      for (int i = 0; i < seq; i++) {
+        final qs = (b * seq + i) * numHeads * headSize + h * headSize;
+        for (int d = 0; d < headSize; d++) {
+          qh[i * headSize + d] = qf[qs + d];
+        }
+      }
+      for (int j = 0; j < seq; j++) {
+        final ks = (b * seq + j) * kvHidden + kvh * headSize;
+        for (int d = 0; d < headSize; d++) {
+          kt[d * seq + j] = kf[ks + d];
+          vh[j * headSize + d] = vf[ks + d];
+        }
+      }
+      scores.fillRange(0, seq * seq, 0);
+      gemm.matmulKernel(qh, 0, kt, 0, scores, 0, seq, headSize, seq);
+      final biasBase =
+          bias == null ? 0 : (b * biasHeads + (h % biasHeads)) * seq * seq;
+      for (int i = 0; i < seq; i++) {
+        final row = i * seq;
+        // GQA is a decoder op: token i attends only to keys 0..i (causal),
+        // plus any additive bias. (Bidirectional exports supply the mask via
+        // bias, but causality is always applied here.)
+        double maxV = double.negativeInfinity;
+        for (int j = 0; j <= i; j++) {
+          var sc = scores[row + j] * s;
+          if (bias != null) sc += bias[biasBase + row + j];
+          scores[row + j] = sc;
+          if (sc > maxV) maxV = sc;
+        }
+        double sum = 0;
+        for (int j = 0; j <= i; j++) {
+          final e = math.exp(scores[row + j] - maxV);
+          scores[row + j] = e;
+          sum += e;
+        }
+        final inv = 1.0 / sum;
+        for (int j = 0; j <= i; j++) {
+          scores[row + j] *= inv;
+        }
+        for (int j = i + 1; j < seq; j++) {
+          scores[row + j] = 0; // masked
+        }
+      }
+      ctx.fillRange(0, seq * headSize, 0);
+      gemm.matmulKernel(scores, 0, vh, 0, ctx, 0, seq, seq, headSize);
+      for (int i = 0; i < seq; i++) {
+        final dst = (b * seq + i) * numHeads * headSize + h * headSize;
+        for (int d = 0; d < headSize; d++) {
+          out[dst + d] = ctx[i * headSize + d];
+        }
+      }
+    }
+  }
+  return Tensor.float(out, [batch, seq, numHeads * headSize]);
+}
+
 /// `MultiHeadAttention` (com.microsoft) — fused multi-head attention over
 /// already-projected `[batch, seq, hidden]` Q/K/V. [attentionBias] (optional)
 /// is an additive `[batch, heads, seq, kvSeq]` mask added to the scaled
