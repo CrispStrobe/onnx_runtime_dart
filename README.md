@@ -75,11 +75,16 @@ linked).
 | Model | HF repo | Notes | Parity |
 |---|---|---|---|
 | SmolLM2-135M-Instruct | `HuggingFaceTB/SmolLM2-135M-Instruct` (ONNX export) | Llama-style decoder; 30× fused **`GroupQueryAttention`** with real **`past`/`present` KV cache** (9 query / 3 KV heads), external `RotaryEmbedding` | prefill + decode 1.0 on `logits` **and** `present.*`; 24-step greedy generation token-for-token identical to ORT |
+| Qwen2.5-0.5B-Instruct | `onnx-community/Qwen2.5-0.5B-Instruct` (fp16) | **fully decomposed** decoder (no fused ops — RoPE / attention as primitives, 24 layers, 2 KV heads); **graph-level KV cache** via `Concat`/`Slice` | prefill logits cosine 0.99999885, decode 0.99999976 (fp16 band); coherent text generation |
 
-Full autoregressive text generation runs in pure Dart: `present_key`/`present_value`
-from each `GroupQueryAttention` feed straight back as the next step's
-`past_key`/`past_value`. See `tool/smollm2_generate.dart` for a greedy loop
-checked against the ORT reference.
+Full autoregressive text generation runs in pure Dart — both the fused-`GroupQueryAttention`
+export style and the fully-decomposed one — with `present_key`/`present_value`
+feeding straight back as the next step's `past_key`/`past_value`.
+`OnnxModel.inputSpecs` reports the decoder's cache shape (layers / KV heads /
+head size) so the empty first-step past can be sized generically. `tool/llm_chat.dart`
+is a complete **text-in / text-out** demo (byte-level BPE tokenizer loaded
+from `tokenizer.json`, ChatML prompt, greedy + temperature/top-k sampling);
+`tool/smollm2_generate.dart` is a greedy loop checked token-for-token against ORT.
 
 ### Sequence-to-sequence & OCR
 

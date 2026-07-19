@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.4.0
+
+- **`OnnxModel.inputSpecs` / `outputNames` + `TensorSpec`** — introspect a
+  graph's required inputs (name, declared shape with symbolic dims as -1, ONNX
+  element type) and output names. KV-cache decoders use this to size their
+  empty first-step `past_key_values.*` feeds without hard-coded config.
+- **End-to-end text generation** verified on **Qwen2.5-0.5B-Instruct** (fp16):
+  a *fully decomposed* decoder — no fused ops, RoPE/attention as primitives,
+  graph-level KV cache via `Concat`/`Slice` — at logits cosine 0.99999885
+  (prefill) / 0.99999976 (decode) vs ORT, plus coherent greedy/sampled text.
+  This complements the fused-`GroupQueryAttention` path (SmolLM2), covering
+  both modern decoder export styles.
+- New tooling: `tool/bpe_tokenizer.dart` (byte-level BPE loaded from a
+  HuggingFace `tokenizer.json`; validated exact-match vs `tokenizers`),
+  `tool/llm_chat.dart` (text-in/text-out chat with greedy + temperature/top-k
+  sampling, decoder shape auto-discovered from `inputSpecs`).
+
 ## 0.3.8
 
 - **`GroupQueryAttention` KV cache** — `past_key`/`past_value` are now consumed

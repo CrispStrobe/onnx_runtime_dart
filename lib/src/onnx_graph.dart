@@ -93,6 +93,25 @@ class OnnxGraphExecutor {
     _nodes = fuse ? _fusePatterns(folded) : folded;
   }
 
+  /// The graph inputs a caller must feed (graph inputs that aren't also
+  /// initializers), with each declared shape resolved to concrete ints where
+  /// possible and symbolic dimensions reported as -1.
+  List<TensorSpec> get inputSpecs {
+    final out = <TensorSpec>[];
+    for (final vi in _graph.input) {
+      if (_initializers.containsKey(vi.name)) continue; // has a default
+      final tt = vi.type.tensorType;
+      final shape = [
+        for (final d in tt.shape.dim) d.hasDimValue() ? d.dimValue.toInt() : -1
+      ];
+      out.add(TensorSpec(vi.name, shape, tt.elemType));
+    }
+    return out;
+  }
+
+  /// The graph's declared output names, in order.
+  List<String> get outputNames => [for (final o in _graph.output) o.name];
+
   /// Rewrites known multi-node patterns into single fused nodes (synthetic
   /// op types prefixed `_Fused`), after constant folding so scalar constants
   /// are initializers. Patterns only fuse when every intermediate value has

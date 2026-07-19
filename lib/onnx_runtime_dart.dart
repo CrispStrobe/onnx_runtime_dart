@@ -29,7 +29,7 @@ import 'src/onnx_graph.dart';
 import 'src/onnx_proto_loader.dart';
 import 'src/tensor.dart';
 
-export 'src/tensor.dart' show Tensor, DType;
+export 'src/tensor.dart' show Tensor, DType, TensorSpec;
 export 'src/onnx_graph.dart' show OnnxGraphExecutor, ExecutionProfile;
 export 'src/onnx_proto_loader.dart' show ExternalDataResolver;
 
@@ -73,6 +73,15 @@ class OnnxModel {
     return OnnxModel._(
         OnnxGraphExecutor(proto, externalData: externalData, fuse: fuse));
   }
+
+  /// The graph inputs a caller must feed (excluding those with initializer
+  /// defaults), each with its declared shape (symbolic dims as -1) and ONNX
+  /// element type. Use this to build correctly-shaped feeds — e.g. the empty
+  /// `past_key_values.*` tensors an LLM decoder needs on its first step.
+  List<TensorSpec> get inputSpecs => _executor.inputSpecs;
+
+  /// The graph's declared output names, in order.
+  List<String> get outputNames => _executor.outputNames;
 
   /// Runs the graph with the given named [inputs] and returns the requested
   /// named [outputNames].

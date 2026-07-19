@@ -36,7 +36,13 @@ def main():
     vocab = m.graph.output[0].type.tensor_type.shape.dim[2].dim_value
     print(f"layers={n_layers} kv_heads={kvh} head_size={hs} vocab={vocab}")
 
-    sess = ort.InferenceSession(path, providers=["CPUExecutionProvider"])
+    so = ort.SessionOptions()
+    # Some fp16 exports trip ORT's own SimplifiedLayerNorm fusion at init;
+    # disabling graph optimization gives a clean unfused oracle (which also
+    # matches this runtime's unfused execution more directly).
+    so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_DISABLE_ALL
+    sess = ort.InferenceSession(path, sess_options=so,
+                                providers=["CPUExecutionProvider"])
     out_names = [o.name for o in sess.get_outputs()]
 
     rng = np.random.default_rng(0)

@@ -170,3 +170,22 @@ class Tensor {
   @override
   String toString() => 'Tensor($dtype, shape=$shape)';
 }
+
+/// A graph input/output declaration: its [name], declared [shape] (symbolic
+/// dimensions reported as -1), and ONNX `elemType` (1=float32, 6=int32,
+/// 7=int64, 9=bool, 10=float16, …). Enough to build correctly-shaped feed
+/// tensors — e.g. the empty `past_key_values.*` entries an LLM decoder needs
+/// on its first step. See `OnnxModel.inputSpecs`.
+class TensorSpec {
+  final String name;
+  final List<int> shape;
+  final int elemType;
+  const TensorSpec(this.name, this.shape, this.elemType);
+
+  /// True for the ONNX integer/bool element types this runtime carries as
+  /// int64 (int32 / int64 / bool), so callers know to feed an int tensor.
+  bool get isInt => elemType == 6 || elemType == 7 || elemType == 9;
+
+  @override
+  String toString() => 'TensorSpec($name, shape=$shape, elemType=$elemType)';
+}
