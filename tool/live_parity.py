@@ -10,6 +10,7 @@ import sys
 
 import numpy as np
 import onnxruntime as ort
+RNG = np.random.default_rng(3)
 
 
 def tensor_json(a: np.ndarray) -> dict:
@@ -68,8 +69,12 @@ def main():
             feed[inp.name] = (np.arange(n) % 2).reshape(dims).astype(
                 np.float32)
         elif ("state" in inp.name or "hidden" in inp.name
-              or inp.name in ("h0", "c0")):
+              or "cache" in inp.name or inp.name in ("h0", "c0")):
             feed[inp.name] = np.zeros(dims, np.float32)
+        elif inp.name.startswith("n_layer_cross") or "cross" in inp.name:
+            feed[inp.name] = (RNG.standard_normal(dims) * 0.1).astype(np.float32)
+        elif "offset" in inp.name.lower() and inp.type == "tensor(int64)":
+            feed[inp.name] = np.zeros(dims, np.int64)
         elif "len" in inp.name.lower():  # sequence/waveform lengths: full
             it = np.int32 if inp.type == "tensor(int32)" else np.int64
             feed[inp.name] = np.full(dims, seq, dtype=it)

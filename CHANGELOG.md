@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.7
+
+- **`GroupQueryAttention` (`com.microsoft`)** — the fused attention op used
+  by nearly every modern LLM export (Llama3 / Qwen2-3 / Gemma2-3 / Phi3 /
+  Mistral): grouped KV heads, internal RoPE, and internal **causal masking**
+  (GQA is a decoder op — it masks future keys regardless of the additive
+  bias). Verified on harrier-oss-v1-270m (Gemma3 decoder, cosine 0.999996)
+  and a `gqa_causal` fixture. present-KV outputs are dummies (no KV-cache
+  reuse yet).
+
 ## 0.3.6
 
 - **Fused transformer ops (`com.microsoft`):** `MultiHeadAttention`,
