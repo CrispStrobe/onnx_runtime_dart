@@ -810,6 +810,24 @@ def main():
          initializers={"seqlens": np.array([Sq - 1], dtype=np.int32),
                        "total": np.array(Sq, dtype=np.int32)},
          n_outputs=1, ms_domain=True)
+    # GroupQueryAttention with a populated KV cache: past_key/value are
+    # prepended and the op returns the full present_key/value. Checks all three
+    # outputs so the cache concat + causal-over-total path stays covered
+    # without the 515MB SmolLM2 model. seqlens_k = past+S-1, total = past+S.
+    Pk = 3
+    emit("gqa_kvcache",
+         [helper.make_node("GroupQueryAttention",
+                           ["q", "k", "v", "past_key", "past_value",
+                            "seqlens", "total"],
+                           ["out0", "out1", "out2"],
+                           num_heads=NH, kv_num_heads=KVh,
+                           domain="com.microsoft")],
+         {"q": f32(B, Sq, NH * hsg), "k": f32(B, Sq, KVh * hsg),
+          "v": f32(B, Sq, KVh * hsg),
+          "past_key": f32(B, KVh, Pk, hsg), "past_value": f32(B, KVh, Pk, hsg)},
+         initializers={"seqlens": np.array([Pk + Sq - 1], dtype=np.int32),
+                       "total": np.array(Pk + Sq, dtype=np.int32)},
+         n_outputs=3, ms_domain=True)
 
     # RotaryEmbedding: input [B,S,NH*hs], non-interleaved, full-head rotation.
     maxpos = 16

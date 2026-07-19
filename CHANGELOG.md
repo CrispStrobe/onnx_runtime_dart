@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.3.8
+
+- **`GroupQueryAttention` KV cache** — `past_key`/`past_value` are now consumed
+  and the real `present_key`/`present_value` are returned (the RoPE'd K and V,
+  concatenated `[batch, kv_heads, past+seq, head_size]`), so the present-KV
+  feeds directly back as the next decode step's past. This unlocks **real
+  autoregressive LLM decoding** in pure Dart. Query token `i` has absolute
+  position `past_len+i` and attends causally to keys `0..past_len+i`; internal
+  RoPE positions offset by `past_len`.
+- Verified end-to-end on **SmolLM2-135M-Instruct** (Llama-style GQA decoder,
+  9 query / 3 KV heads): prefill and decode steps at cosine 1.0 vs ORT on
+  `logits` **and** `present.*` KV, plus a 24-step greedy generation that is
+  **token-for-token identical** to ORT feeding our own cache back as past.
+- New `gqa_kvcache` fixture checks the populated-cache path (all three outputs)
+  against the ORT oracle without needing the 515MB model.
+
 ## 0.3.7
 
 - **`GroupQueryAttention` (`com.microsoft`)** — the fused attention op used

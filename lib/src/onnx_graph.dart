@@ -840,22 +840,21 @@ class OnnxGraphExecutor {
               attrs.getFloat('epsilon')!)
         ];
       case 'GroupQueryAttention':
-        return [
-          ops.opGroupQueryAttention(need(0), need(1), need(2),
-              numHeads: attrs.getInt('num_heads')!,
-              kvNumHeads: attrs.getInt('kv_num_heads')!,
-              scale: attrs.getFloat('scale'),
-              doRotary: (attrs.getInt('do_rotary') ?? 0) != 0,
-              rotaryInterleaved: (attrs.getInt('rotary_interleaved') ?? 0) != 0,
-              cosCache: ins.length > 7 ? ins[7] : null,
-              sinCache: ins.length > 8 ? ins[8] : null,
-              attentionBias: ins.length > 10 ? ins[10] : null,
-              softcap: attrs.getFloat('softcap') ?? 0,
-              localWindow: attrs.getInt('local_window_size') ?? -1),
-          // present_k / present_v (dummy — no KV-cache support).
-          Tensor.scalarFloat(0),
-          Tensor.scalarFloat(0),
-        ];
+        // Returns [output, present_key, present_value] — the present KV feeds
+        // the next decode step's past_key/past_value.
+        return ops.opGroupQueryAttention(need(0), need(1), need(2),
+            numHeads: attrs.getInt('num_heads')!,
+            kvNumHeads: attrs.getInt('kv_num_heads')!,
+            scale: attrs.getFloat('scale'),
+            doRotary: (attrs.getInt('do_rotary') ?? 0) != 0,
+            rotaryInterleaved: (attrs.getInt('rotary_interleaved') ?? 0) != 0,
+            pastKey: ins.length > 3 ? ins[3] : null,
+            pastValue: ins.length > 4 ? ins[4] : null,
+            cosCache: ins.length > 7 ? ins[7] : null,
+            sinCache: ins.length > 8 ? ins[8] : null,
+            attentionBias: ins.length > 10 ? ins[10] : null,
+            softcap: attrs.getFloat('softcap') ?? 0,
+            localWindow: attrs.getInt('local_window_size') ?? -1);
       case 'MultiHeadAttention':
         return [
           ops.opMultiHeadAttention(need(0), need(1), need(2),

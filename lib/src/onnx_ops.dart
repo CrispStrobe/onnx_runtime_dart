@@ -1388,10 +1388,17 @@ Tensor opRMSNorm(Tensor x, Tensor gamma, int axis, double eps) {
 /// exports use (Llama3 / Qwen2 / Gemma3). [numHeads] query heads share
 /// [kvNumHeads] KV heads (each query head `h` attends to KV head
 /// `h ~/ (numHeads/kvNumHeads)`). When [doRotary], RoPE is applied to Q and K
-/// inside the op from [cosCache]/[sinCache] at positions `0..seq-1` (no KV
-/// cache supported here). [attentionBias] is the additive mask (typically the
-/// causal mask). `softcap` and `local_window` are not supported.
-Tensor opGroupQueryAttention(Tensor q, Tensor k, Tensor v,
+/// inside the op from [cosCache]/[sinCache] at positions `pastLen..pastLen+seq`.
+/// [attentionBias] is the additive mask (typically the causal mask).
+/// `softcap` and `local_window` are not supported.
+///
+/// KV cache: [pastKey]/[pastValue] (`[batch, kvNumHeads, pastLen, headSize]`)
+/// are prepended to the current K/V; the op returns
+/// `[output, presentKey, presentValue]` where present KV is the full
+/// `[batch, kvNumHeads, pastLen+seq, headSize]` concatenation (the RoPE'd K and
+/// the raw V), ready to feed back as the next step's past. Query token `i` has
+/// absolute position `pastLen+i` and attends causally to keys `0..pastLen+i`.
+List<Tensor> opGroupQueryAttention(Tensor q, Tensor k, Tensor v,
     {required int numHeads,
     required int kvNumHeads,
     double? scale,
@@ -1399,6 +1406,8 @@ Tensor opGroupQueryAttention(Tensor q, Tensor k, Tensor v,
     bool rotaryInterleaved = false,
     Tensor? cosCache,
     Tensor? sinCache,
+    Tensor? pastKey,
+    Tensor? pastValue,
     Tensor? attentionBias,
     double softcap = 0,
     int localWindow = -1}) {
@@ -1409,11 +1418,16 @@ Tensor opGroupQueryAttention(Tensor q, Tensor k, Tensor v,
   final batch = q.shape[0], seq = q.shape[1];
   final headSize = q.shape[2] ~/ numHeads;
   final group = numHeads ~/ kvNumHeads;
+  final kvHidden = kvNumHeads * headSize;
+  final pastLen =
+      (pastKey != null && pastKey.shape.length == 4) ? pastKey.shape[2] : 0;
+  final totalLen = pastLen + seq;
 
   var qq = q, kk = k;
   if (doRotary) {
     final pos = Tensor.int64(
-        Int64List.fromList([for (int s = 0; s < seq; s++) s]), [1, seq]);
+        Int64List.fromList([for (int s = 0; s < seq; s++) pastLen + s]),
+        [1, seq]);
     qq = opRotaryEmbedding(q, pos, cosCache!, sinCache!,
         interleaved: rotaryInterleaved, numHeads: numHeads);
     kk = opRotaryEmbedding(k, pos, cosCache, sinCache,
@@ -1421,65 +1435,96 @@ Tensor opGroupQueryAttention(Tensor q, Tensor k, Tensor v,
   }
   final s = scale ?? (1.0 / math.sqrt(headSize));
   final qf = qq.f!, kf = kk.f!, vf = v.f ?? v.asFloatList();
+  final pkf = pastKey?.f ?? pastKey?.asFloatList();
+  final pvf = pastValue?.f ?? pastValue?.asFloatList();
   final bias = attentionBias?.asFloatList();
   final biasHeads = attentionBias == null ? 0 : attentionBias.shape[1];
-  final kvHidden = kvNumHeads * headSize;
+
+  // present_key / present_value: [batch, kvNumHeads, totalLen, headSize],
+  // the past cache (if any) followed by the current step's K/V.
+  final presentK = Float32List(batch * kvNumHeads * totalLen * headSize);
+  final presentV = Float32List(batch * kvNumHeads * totalLen * headSize);
+  for (int b = 0; b < batch; b++) {
+    for (int kvh = 0; kvh < kvNumHeads; kvh++) {
+      final baseP = ((b * kvNumHeads + kvh) * totalLen) * headSize;
+      for (int j = 0; j < pastLen; j++) {
+        final src = ((b * kvNumHeads + kvh) * pastLen + j) * headSize;
+        final dst = baseP + j * headSize;
+        for (int d = 0; d < headSize; d++) {
+          presentK[dst + d] = pkf![src + d];
+          presentV[dst + d] = pvf![src + d];
+        }
+      }
+      for (int j = 0; j < seq; j++) {
+        final src = (b * seq + j) * kvHidden + kvh * headSize;
+        final dst = baseP + (pastLen + j) * headSize;
+        for (int d = 0; d < headSize; d++) {
+          presentK[dst + d] = kf[src + d];
+          presentV[dst + d] = vf[src + d];
+        }
+      }
+    }
+  }
 
   final out = Float32List(batch * seq * numHeads * headSize);
   final qh = Float32List(seq * headSize);
-  final kt = Float32List(headSize * seq);
-  final vh = Float32List(seq * headSize);
-  final scores = Float32List(seq * seq);
+  final kt = Float32List(headSize * totalLen);
+  final scores = Float32List(seq * totalLen);
   final ctx = Float32List(seq * headSize);
 
   for (int b = 0; b < batch; b++) {
     for (int h = 0; h < numHeads; h++) {
       final kvh = h ~/ group;
+      final baseP = ((b * kvNumHeads + kvh) * totalLen) * headSize;
       for (int i = 0; i < seq; i++) {
         final qs = (b * seq + i) * numHeads * headSize + h * headSize;
         for (int d = 0; d < headSize; d++) {
           qh[i * headSize + d] = qf[qs + d];
         }
       }
-      for (int j = 0; j < seq; j++) {
-        final ks = (b * seq + j) * kvHidden + kvh * headSize;
+      // K^T for this KV head: [headSize, totalLen], read from present cache.
+      for (int j = 0; j < totalLen; j++) {
+        final ks = baseP + j * headSize;
         for (int d = 0; d < headSize; d++) {
-          kt[d * seq + j] = kf[ks + d];
-          vh[j * headSize + d] = vf[ks + d];
+          kt[d * totalLen + j] = presentK[ks + d];
         }
       }
-      scores.fillRange(0, seq * seq, 0);
-      gemm.matmulKernel(qh, 0, kt, 0, scores, 0, seq, headSize, seq);
-      final biasBase =
-          bias == null ? 0 : (b * biasHeads + (h % biasHeads)) * seq * seq;
+      scores.fillRange(0, seq * totalLen, 0);
+      gemm.matmulKernel(qh, 0, kt, 0, scores, 0, seq, headSize, totalLen);
+      final biasBase = bias == null
+          ? 0
+          : (b * biasHeads + (h % biasHeads)) * seq * totalLen;
       for (int i = 0; i < seq; i++) {
-        final row = i * seq;
-        // GQA is a decoder op: token i attends only to keys 0..i (causal),
-        // plus any additive bias. (Bidirectional exports supply the mask via
-        // bias, but causality is always applied here.)
+        final row = i * totalLen;
+        // token i (absolute position pastLen+i) attends causally to keys
+        // 0..pastLen+i, plus any additive bias.
+        final lastKey = pastLen + i;
         double maxV = double.negativeInfinity;
-        for (int j = 0; j <= i; j++) {
+        for (int j = 0; j <= lastKey; j++) {
           var sc = scores[row + j] * s;
           if (bias != null) sc += bias[biasBase + row + j];
           scores[row + j] = sc;
           if (sc > maxV) maxV = sc;
         }
         double sum = 0;
-        for (int j = 0; j <= i; j++) {
+        for (int j = 0; j <= lastKey; j++) {
           final e = math.exp(scores[row + j] - maxV);
           scores[row + j] = e;
           sum += e;
         }
         final inv = 1.0 / sum;
-        for (int j = 0; j <= i; j++) {
+        for (int j = 0; j <= lastKey; j++) {
           scores[row + j] *= inv;
         }
-        for (int j = i + 1; j < seq; j++) {
+        for (int j = lastKey + 1; j < totalLen; j++) {
           scores[row + j] = 0; // masked
         }
       }
+      // ctx = scores · present_V  ([seq,totalLen] · [totalLen,headSize]); the
+      // per-head V slice is contiguous at baseP.
       ctx.fillRange(0, seq * headSize, 0);
-      gemm.matmulKernel(scores, 0, vh, 0, ctx, 0, seq, seq, headSize);
+      gemm.matmulKernel(scores, 0, presentV, baseP, ctx, 0, seq, totalLen,
+          headSize);
       for (int i = 0; i < seq; i++) {
         final dst = (b * seq + i) * numHeads * headSize + h * headSize;
         for (int d = 0; d < headSize; d++) {
@@ -1488,7 +1533,11 @@ Tensor opGroupQueryAttention(Tensor q, Tensor k, Tensor v,
       }
     }
   }
-  return Tensor.float(out, [batch, seq, numHeads * headSize]);
+  return [
+    Tensor.float(out, [batch, seq, numHeads * headSize]),
+    Tensor.float(presentK, [batch, kvNumHeads, totalLen, headSize]),
+    Tensor.float(presentV, [batch, kvNumHeads, totalLen, headSize]),
+  ];
 }
 
 /// `MultiHeadAttention` (com.microsoft) — fused multi-head attention over
