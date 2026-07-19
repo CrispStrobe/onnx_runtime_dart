@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.10.2
+
+- **~5× faster 2-D `ConvTranspose`.** The 2-D transposed convolution had only a
+  naive per-element output scatter (`O(C·H·W·kH·kW·M)`, cache-hostile — seconds
+  per call on decoder/vocoder-style graphs). Added a GEMM + col2im fast path
+  (batch 1, no explicit `output_shape`) that runs the channel contraction on the
+  SIMD kernel and overlap-adds the result — mirroring the existing 1-D path.
+  Measured on htdemucs: the 8 ConvTranspose calls went 94.9s → 18.2s (~5.2×,
+  from 28% of runtime to 5%), output unchanged (max|Δ| ~5e-7 vs onnxruntime).
+  Speeds any 2-D transposed-conv model (SD/TAESD VAE decoders, super-resolution,
+  GAN generators). All 8 `convtranspose_*` fixtures still pass.
+
 ## 0.10.1
 
 - **GLU fusion.** `Split`-in-half → `Sigmoid(second)` → `Mul(first, ·)` (the

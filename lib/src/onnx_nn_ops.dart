@@ -426,6 +426,64 @@ Tensor opConvTranspose(
     return Tensor.float(out, [1, m, outW]);
   }
 
+  // 2-D fast path: the channel contraction is one GEMM (Wᵀ·X), then a col2im
+  // overlap-add scatter into the output. The generic per-element path below is
+  // O(C·H·W·kH·kW·M) with cache-hostile scatter — seconds per call on the
+  // Demucs / VAE decoders; this makes the heavy work a SIMD GEMM.
+  if (nd == 2 && outputShape == null && n == 1) {
+    final hIn = inSp[0], wIn = inSp[1], kH = kernel[0], kW = kernel[1];
+    final outH = (hIn - 1) * s[0] + d[0] * (kH - 1) + 1 + op[0] - p[0] - p[2];
+    final outW = (wIn - 1) * s[1] + d[1] * (kW - 1) + 1 + op[1] - p[1] - p[3];
+    final xf = x.asFloatList(), wf = w.asFloatList();
+    final out = Float32List(m * outH * outW);
+    final hw = hIn * wIn, mkk = mPerGroup * kH * kW;
+    final wT = Float32List(mkk * cPerGroup);
+    final prod = Float32List(mkk * hw);
+    for (int g = 0; g < group; g++) {
+      // Pack Wᵀ[g]: [mPerGroup*kH*kW, cPerGroup] from W [C, M/g, kH, kW].
+      for (int c = 0; c < cPerGroup; c++) {
+        final wBase = ((g * cPerGroup + c) * mPerGroup) * kH * kW;
+        for (int idx = 0; idx < mkk; idx++) {
+          wT[idx * cPerGroup + c] = wf[wBase + idx];
+        }
+      }
+      prod.fillRange(0, prod.length, 0);
+      gemm.matmulKernel(
+          wT, 0, xf, g * cPerGroup * hw, prod, 0, mkk, cPerGroup, hw);
+      // col2im: overlap-add each (mm, kh, kw) plane into the output.
+      for (int mm = 0; mm < mPerGroup; mm++) {
+        final oBase = (g * mPerGroup + mm) * outH * outW;
+        for (int kh = 0; kh < kH; kh++) {
+          final ohShift = kh * d[0] - p[0];
+          for (int kw = 0; kw < kW; kw++) {
+            final owShift = kw * d[1] - p[1];
+            final pBase = ((mm * kH + kh) * kW + kw) * hw;
+            for (int ih = 0; ih < hIn; ih++) {
+              final oh = ih * s[0] + ohShift;
+              if (oh < 0 || oh >= outH) continue;
+              final pRow = pBase + ih * wIn, oRow = oBase + oh * outW;
+              for (int iw = 0; iw < wIn; iw++) {
+                final ow = iw * s[1] + owShift;
+                if (ow >= 0 && ow < outW) out[oRow + ow] += prod[pRow + iw];
+              }
+            }
+          }
+        }
+      }
+    }
+    if (bias != null) {
+      final bff = bias.asFloatList();
+      final plane = outH * outW;
+      for (int mm = 0; mm < m; mm++) {
+        final base = mm * plane, bv = bff[mm];
+        for (int t = 0; t < plane; t++) {
+          out[base + t] += bv;
+        }
+      }
+    }
+    return Tensor.float(out, [1, m, outH, outW]);
+  }
+
   final outSp = List<int>.filled(nd, 0);
   for (int k = 0; k < nd; k++) {
     final full = (inSp[k] - 1) * s[k] + d[k] * (kernel[k] - 1) + 1 + op[k];
