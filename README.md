@@ -70,6 +70,17 @@ linked).
 | zerank-1-small int4 `†` | `cstr/zerank-1-small-ONNX` | int4 + **fp16-compute** regions | fp16-caveat (below) |
 | PIXIE-Rune-v1.0 int4 | `cstr/PIXIE-Rune-v1.0-ONNX` | XLM-R, **ONNX-native INT4** QDQ (packed 2/byte) | cosine 1.0 |
 
+### Generative LLMs (autoregressive decoding, KV cache)
+
+| Model | HF repo | Notes | Parity |
+|---|---|---|---|
+| SmolLM2-135M-Instruct | `HuggingFaceTB/SmolLM2-135M-Instruct` (ONNX export) | Llama-style decoder; 30× fused **`GroupQueryAttention`** with real **`past`/`present` KV cache** (9 query / 3 KV heads), external `RotaryEmbedding` | prefill + decode 1.0 on `logits` **and** `present.*`; 24-step greedy generation token-for-token identical to ORT |
+
+Full autoregressive text generation runs in pure Dart: `present_key`/`present_value`
+from each `GroupQueryAttention` feed straight back as the next step's
+`past_key`/`past_value`. See `tool/smollm2_generate.dart` for a greedy loop
+checked against the ORT reference.
+
 ### Sequence-to-sequence & OCR
 
 | Model | HF repo | Notes | Parity |
@@ -215,9 +226,10 @@ self-contained, runnable graph built with the protobuf types.
   `Einsum` (general 1/2-operand equations without ellipsis; the transformer-
   hot patterns keep specialized kernels), `ArgMax`, `ArgMin`, `LogSoftmax`.
 - **Fused transformer ops (`com.microsoft`):** `MultiHeadAttention`,
-  `GroupQueryAttention` (causal, grouped KV heads, internal RoPE — the
-  fused op modern LLM exports use: Llama3 / Qwen2-3 / Gemma2-3 / Phi3 /
-  Mistral), `RotaryEmbedding` (interleaved + rotate-half, partial-rotation),
+  `GroupQueryAttention` (causal, grouped KV heads, internal RoPE, **real
+  `past`/`present` KV cache** for autoregressive decoding — the fused op
+  modern LLM exports use: Llama3 / Qwen2-3 / Gemma2-3 / Phi3 / Mistral),
+  `RotaryEmbedding` (interleaved + rotate-half, partial-rotation),
   `SimplifiedLayerNormalization` / `SkipSimplifiedLayerNormalization`
   (RMSNorm) — so onnx-community / Optimum-optimized transformer exports
   (which fuse attention rather than emitting decomposed graphs) run directly.
