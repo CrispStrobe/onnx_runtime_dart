@@ -1,0 +1,36 @@
+# Analyze, test, and a short reader-robustness fuzz smoke test.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dart-lang/setup-dart@v1
+      - run: dart pub get
+      - run: dart analyze --fatal-infos
+      - run: dart test
+
+  fuzz-smoke:
+    # Quick blind fuzz of the parsers — a regression gate for reader robustness.
+    # Deep coverage-guided runs are done manually (see tool/fuzz/README.md).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dart-lang/setup-dart@v1
+      - run: dart pub get
+      - name: Fuzz ONNX parser (blind, 30s)
+        env: { FUZZ_BUDGET_MS: '30000', FUZZ_ITERS: '2000000' }
+        run: dart run tool/fuzz/onnx_bytes.dart
+      - name: Fuzz tokenizer config loaders (blind, 20s)
+        env: { FUZZ_BUDGET_MS: '20000', FUZZ_ITERS: '2000000' }
+        run: dart run tool/fuzz/tokenizer_json.dart
+      - name: Fuzz tokenizer encode paths (blind, 20s)
+        env: { FUZZ_BUDGET_MS: '20000', FUZZ_ITERS: '2000000' }
+        run: dart run tool/fuzz/tokenizer_text.dart

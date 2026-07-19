@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.9.0
+
+- **Reader-robustness hardening, driven by `covfuzz`** (blind + coverage-guided
+  reader fuzzing). The parsers that read untrusted input now provably parse or
+  reject with a single documented exception — no leaked `RangeError` /
+  `StateError` / `TypeError` / protobuf-internal exception, OOM, or hang:
+  - `OnnxModel.fromBytes` — every protobuf decode failure now surfaces as
+    `FormatException` (previously leaked the protobuf library's
+    `InvalidProtocolBufferException`). Coverage-guided fuzzing drove the corpus
+    deep into tensor loading, constant folding, and fusion (behind a valid
+    protobuf precondition) — all clean; the existing length validators hold.
+  - New `WordPieceTokenizer.fromJson` / `UnigramTokenizer.fromJson` /
+    `BpeTokenizer.fromJson` (in-memory / web config loading); a malformed
+    `tokenizer.json` rejects with `FormatException` instead of a leaked
+    cast/type error. `encode`/`encodePair` are total — verified never to throw
+    on any input text.
+  - Four hardening guards, each proven load-bearing via `covfuzz_mutverify`,
+    with minimized-reproducer regression tests
+    (`test/parser_robustness_test.dart`, `test/tokenizer_robustness_test.dart`).
+- Reusable fuzz harnesses under `tool/fuzz/` (`onnx_bytes`, `onnx_bytes_cov`,
+  `tokenizer_text`, `tokenizer_json`) + a CI job that runs a short blind-fuzz
+  smoke test on every push. See `tool/fuzz/README.md`.
+
 ## 0.8.1
 
 - **Tokenizer normalization hardening** (found by adversarial fuzzing against

@@ -46,8 +46,26 @@ class UnigramTokenizer {
       this.singleTpl,
       this.pairTpl);
 
-  factory UnigramTokenizer.fromFile(String path) {
-    final j = jsonDecode(File(path).readAsStringSync()) as Map<String, dynamic>;
+  factory UnigramTokenizer.fromFile(String path) =>
+      UnigramTokenizer.fromJson(File(path).readAsStringSync());
+
+  /// Build from a `tokenizer.json` string (web / in-memory). A malformed or
+  /// structurally-wrong config is rejected with [FormatException] — never a
+  /// leaked cast/type error (guard:uni_config, verified by tool/fuzz/).
+  factory UnigramTokenizer.fromJson(String source) {
+    try {
+      return UnigramTokenizer._fromJson(source);
+    } on FormatException {
+      rethrow;
+      // GUARD:uni_config >>>
+    } catch (e) {
+      throw FormatException('Invalid Unigram tokenizer.json: $e');
+      // GUARD:uni_config <<<
+    }
+  }
+
+  factory UnigramTokenizer._fromJson(String source) {
+    final j = jsonDecode(source) as Map<String, dynamic>;
     final model = j['model'] as Map<String, dynamic>;
     final pieceToId = <String, int>{};
     final pieceScore = <String, double>{};

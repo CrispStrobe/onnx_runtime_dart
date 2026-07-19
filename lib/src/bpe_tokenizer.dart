@@ -31,8 +31,26 @@ class BpeTokenizer {
       this.byteEncoder, this.byteDecoder, this._splitRe, this._specialRe,
       this._nfc, this._nfkc);
 
-  factory BpeTokenizer.fromFile(String path) {
-    final j = jsonDecode(File(path).readAsStringSync()) as Map<String, dynamic>;
+  factory BpeTokenizer.fromFile(String path) =>
+      BpeTokenizer.fromJson(File(path).readAsStringSync());
+
+  /// Build from a `tokenizer.json` string (web / in-memory). A malformed or
+  /// structurally-wrong config is rejected with [FormatException] — never a
+  /// leaked cast/type error (guard:bpe_config, verified by tool/fuzz/).
+  factory BpeTokenizer.fromJson(String source) {
+    try {
+      return BpeTokenizer._fromJson(source);
+    } on FormatException {
+      rethrow;
+      // GUARD:bpe_config >>>
+    } catch (e) {
+      throw FormatException('Invalid BPE tokenizer.json: $e');
+      // GUARD:bpe_config <<<
+    }
+  }
+
+  factory BpeTokenizer._fromJson(String source) {
+    final j = jsonDecode(source) as Map<String, dynamic>;
     final model = j['model'] as Map<String, dynamic>;
     final vocab = (model['vocab'] as Map<String, dynamic>)
         .map((k, v) => MapEntry(k, (v as num).toInt()));

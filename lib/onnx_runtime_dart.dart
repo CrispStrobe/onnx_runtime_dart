@@ -64,21 +64,20 @@ class OnnxModel {
       {ExternalDataResolver? externalData,
       bool fuse = true,
       bool lastTokenLogits = false}) {
-    // ModelProto.fromBuffer parses untrusted bytes. The protobuf decoder
-    // signals malformed data with an Exception (InvalidProtocolBufferException),
-    // but a corrupt length-delimited field can instead leak a RangeError from
-    // Uint8List.view. Normalize any leaked Error to a clean FormatException so a
-    // bad/hostile .onnx never surfaces an opaque range error to the caller.
+    // ModelProto.fromBuffer parses untrusted bytes. Malformed data surfaces
+    // either as the protobuf decoder's own InvalidProtocolBufferException or,
+    // for a corrupt length-delimited field, as a leaked RangeError from
+    // Uint8List.view. Both mean the same thing — bad input — so normalize every
+    // decode failure to the single documented reject type (FormatException), so
+    // a caller catching it handles every malformed .onnx without depending on a
+    // package:protobuf-internal exception type. (Verified by tool/fuzz/.)
     final ModelProto proto;
     try {
       proto = ModelProto.fromBuffer(bytes);
     } catch (e) {
       // GUARD:protobuf_leak >>>
-      if (e is! Exception) {
-        throw FormatException('Malformed ONNX model (protobuf decode): $e');
-      }
+      throw FormatException('Malformed ONNX model (protobuf decode): $e');
       // GUARD:protobuf_leak <<<
-      rethrow;
     }
     return OnnxModel._(OnnxGraphExecutor(proto,
         externalData: externalData,

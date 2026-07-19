@@ -3,3 +3,5 @@
 pubspec.lock
 build/
 .venv/
+.corpus/
+.crashes/

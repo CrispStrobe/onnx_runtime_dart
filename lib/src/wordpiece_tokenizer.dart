@@ -31,8 +31,26 @@ class WordPieceTokenizer {
       this.maxChars, this.lowercase, this.stripAccents, this.clsId, this.sepId,
       this.singleTpl, this.pairTpl);
 
-  factory WordPieceTokenizer.fromFile(String path) {
-    final j = jsonDecode(File(path).readAsStringSync()) as Map<String, dynamic>;
+  factory WordPieceTokenizer.fromFile(String path) =>
+      WordPieceTokenizer.fromJson(File(path).readAsStringSync());
+
+  /// Build from a `tokenizer.json` string (web / in-memory). A malformed or
+  /// structurally-wrong config is rejected with [FormatException] — never a
+  /// leaked cast/type error (guard:wp_config, verified by tool/fuzz/).
+  factory WordPieceTokenizer.fromJson(String source) {
+    try {
+      return WordPieceTokenizer._fromJson(source);
+    } on FormatException {
+      rethrow;
+      // GUARD:wp_config >>>
+    } catch (e) {
+      throw FormatException('Invalid WordPiece tokenizer.json: $e');
+      // GUARD:wp_config <<<
+    }
+  }
+
+  factory WordPieceTokenizer._fromJson(String source) {
+    final j = jsonDecode(source) as Map<String, dynamic>;
     final model = j['model'] as Map<String, dynamic>;
     final vocab = (model['vocab'] as Map<String, dynamic>)
         .map((k, v) => MapEntry(k, (v as num).toInt()));
