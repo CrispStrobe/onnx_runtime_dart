@@ -32,4 +32,9 @@ void main() {
         ['<s>', '▁he', '</s>', '</s>', '▁wor', 'ld', '</s>']);
     expect(types.every((t) => t == 0), isTrue);
   });
+
+  test('empty input yields only the special tokens (no spurious marker)', () {
+    expect(tok.encode(''), tok.encode('', addSpecial: true));
+    expect(tok.tokens(''), ['<s>', '</s>']);
+  });
 }

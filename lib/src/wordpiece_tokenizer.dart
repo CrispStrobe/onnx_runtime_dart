@@ -2,8 +2,12 @@
 /// `tokenizer.json`), so the embedding/reranker family (BERT / MiniLM / MPNet /
 /// GTE / E5 / mxbai …) is text-in / vector-out in pure Dart. Reproduces the
 /// `BertNormalizer` + `BertPreTokenizer` + greedy WordPiece + `[CLS]…[SEP]`
-/// pipeline; accent stripping uses a precomputed NFD table (see
-/// `bert_strip_accents.dart`) since Dart core has no Unicode normalization.
+/// pipeline. `strip_accents` is full canonical NFD-then-drop-combining-marks
+/// via a precomputed BMP table (`bert_strip_accents.dart`) plus algorithmic
+/// Hangul syllable decomposition — so ids match the reference across scripts
+/// (Latin, Greek, Cyrillic, Korean jamo, …), since Dart core has no Unicode
+/// normalization. Validated exact vs the reference `tokenizers` library over a
+/// broad multilingual corpus.
 library;
 
 import 'dart:convert';
@@ -88,6 +92,19 @@ class WordPieceTokenizer {
         cp == 0xFEFF;
   }
 
+  /// Canonical NFD of a Hangul syllable into conjoining jamo (L, V, [T]) —
+  /// the arithmetic decomposition from the Unicode standard. These jamo are
+  /// `Lo` (not combining), so BERT's `strip_accents` keeps them.
+  static void _decomposeHangul(int cp, StringBuffer sb) {
+    const sBase = 0xAC00, lBase = 0x1100, vBase = 0x1161, tBase = 0x11A7;
+    const vCount = 21, tCount = 28, nCount = vCount * tCount;
+    final si = cp - sBase;
+    sb.writeCharCode(lBase + si ~/ nCount);
+    sb.writeCharCode(vBase + (si % nCount) ~/ tCount);
+    final t = si % tCount;
+    if (t != 0) sb.writeCharCode(tBase + t);
+  }
+
   static bool _isCjk(int cp) =>
       (cp >= 0x4E00 && cp <= 0x9FFF) ||
       (cp >= 0x3400 && cp <= 0x4DBF) ||
@@ -135,9 +152,13 @@ class WordPieceTokenizer {
     if (stripAccents) {
       final sb = StringBuffer();
       for (final cp in s.runes) {
+        if (cp >= 0xAC00 && cp <= 0xD7A3) {
+          _decomposeHangul(cp, sb); // syllable → conjoining jamo (algorithmic)
+          continue;
+        }
         final rep = bertStripAccents[cp];
         if (rep != null) {
-          sb.write(rep); // may be '' for a pure combining mark
+          sb.write(rep); // NFD-then-drop-Mn; '' for a pure combining mark
         } else {
           sb.writeCharCode(cp);
         }

@@ -1,7 +1,7 @@
 /// Minimal byte-level BPE tokenizer (GPT-2 / Qwen / Llama-BPE family), loading
-/// a HuggingFace `tokenizer.json` directly. Enough to drive real text-in /
-/// text-out generation with the pure-Dart ONNX runtime; not a full
-/// `tokenizers` port (no normalization beyond byte-level, no template engine).
+/// a HuggingFace `tokenizer.json` directly. Applies a declared NFC/NFKC
+/// normalizer (Qwen uses NFC) before byte-level encoding; validated exact vs
+/// the reference `tokenizers` library over a broad corpus.
 ///
 /// The pipeline mirrors GPT-2: split on the standard pre-tokenization regex,
 /// map each UTF-8 byte to a printable unicode char (`bytes_to_unicode`), run
@@ -13,6 +13,9 @@ library;
 import 'dart:convert';
 import 'dart:io';
 
+import 'nfc.dart';
+import 'nfkc_compat.dart';
+
 class BpeTokenizer {
   final Map<String, int> vocab;
   final Map<int, String> idToToken;
@@ -22,9 +25,11 @@ class BpeTokenizer {
   final Map<int, int> byteDecoder; // unicode code point -> byte
   final RegExp _splitRe;
   final RegExp? _specialRe;
+  final bool _nfc, _nfkc; // declared normalizer (e.g. Qwen uses NFC)
 
   BpeTokenizer._(this.vocab, this.idToToken, this.mergeRank, this.specials,
-      this.byteEncoder, this.byteDecoder, this._splitRe, this._specialRe);
+      this.byteEncoder, this.byteDecoder, this._splitRe, this._specialRe,
+      this._nfc, this._nfkc);
 
   factory BpeTokenizer.fromFile(String path) {
     final j = jsonDecode(File(path).readAsStringSync()) as Map<String, dynamic>;
@@ -65,8 +70,39 @@ class BpeTokenizer {
           .join('|');
       specialRe = RegExp(alt);
     }
-    return BpeTokenizer._(
-        vocab, idToToken, mergeRank, specials, enc, dec, splitRe, specialRe);
+    // Declared unicode normalizer (Qwen/Llama BPE commonly use NFC).
+    var nfc = false, nfkc = false;
+    void scan(Object? n) {
+      if (n is! Map) return;
+      if (n['type'] == 'NFC') nfc = true;
+      if (n['type'] == 'NFKC') nfkc = true;
+      if (n['type'] == 'Sequence') {
+        for (final x in (n['normalizers'] as List? ?? const [])) {
+          scan(x);
+        }
+      }
+    }
+
+    scan(j['normalizer']);
+    return BpeTokenizer._(vocab, idToToken, mergeRank, specials, enc, dec,
+        splitRe, specialRe, nfc, nfkc);
+  }
+
+  /// Apply the declared unicode normalizer to a (non-special) text chunk.
+  String _normalize(String text) {
+    if (_nfkc) {
+      final sb = StringBuffer();
+      for (final cp in text.runes) {
+        final m = nfkcCompat[cp];
+        if (m != null) {
+          sb.write(m);
+        } else {
+          sb.writeCharCode(cp);
+        }
+      }
+      return composeNfc(sb.toString());
+    }
+    return _nfc ? composeNfc(text) : text;
   }
 
   /// GPT-2 `bytes_to_unicode`: a reversible map from each of the 256 byte
@@ -129,7 +165,8 @@ class BpeTokenizer {
     return parts;
   }
 
-  List<int> _encodeChunk(String text) {
+  List<int> _encodeChunk(String rawText) {
+    final text = _normalize(rawText);
     final ids = <int>[];
     for (final m in _splitRe.allMatches(text)) {
       final piece = m.group(0)!;

@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.8.1
+
+- **Tokenizer normalization hardening** (found by adversarial fuzzing against
+  the reference `tokenizers` library over a 65-string multilingual/edge corpus;
+  all three tokenizers now match **65/65** on ids):
+  - WordPiece `strip_accents` is now full canonical **NFD-then-drop-Mn** over
+    the BMP plus algorithmic **Hangul** syllable → jamo decomposition — fixing
+    Korean, and correct across Greek/Cyrillic/Indic (was Latin-only, produced
+    `[UNK]` for those scripts).
+  - Unigram now applies canonical **NFC composition** of base+combining
+    sequences (`nfc.dart`), maps zero-width/BOM to space, and no longer emits a
+    spurious `▁` for empty input.
+  - BPE now honors a declared **NFC/NFKC** normalizer (Qwen uses NFC) before
+    byte-level encoding.
+  - Shared `nfc.dart` (canonical composition) + full-BMP `bert_strip_accents`
+    and `nfkc_compat` tables, all generated from Python `unicodedata`.
+
 ## 0.8.0
 
 - **Sentence-pair tokenization for cross-encoder rerankers.** All three

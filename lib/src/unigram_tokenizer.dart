@@ -6,16 +6,17 @@
 ///
 /// Normalization: SentencePiece's `Precompiled` charsmap is approximated by a
 /// per-codepoint NFKC compatibility fold (`nfkc_compat.dart` — full-width
-/// forms, ligatures, fractions, circled numbers …) plus whitespace collapsing.
-/// This matches the reference exactly for NFC-normalized input across scripts.
-/// The one unhandled case is base+combining *composition* (e.g. an "e" plus a
-/// separate combining acute instead of a precomposed "é"); feed NFC text for
-/// those. Byte-fallback vocabularies are not supported.
+/// forms, ligatures, fractions, circled numbers …), canonical NFC composition
+/// of base+combining sequences (`nfc.dart`), zero-width/BOM → space, and
+/// whitespace collapsing. Validated exact vs the reference `tokenizers`
+/// library over a broad multilingual corpus. Byte-fallback vocabularies are
+/// not supported.
 library;
 
 import 'dart:convert';
 import 'dart:io';
 
+import 'nfc.dart';
 import 'nfkc_compat.dart';
 import 'token_template.dart';
 
@@ -112,7 +113,7 @@ class UnigramTokenizer {
   String _normalize(String text) {
     final sb = StringBuffer();
     var prevSpace = false;
-    for (final raw in text.runes) {
+    for (final raw in composeNfc(text).runes) {
       // Per-char NFKC compatibility fold (full-width, ligatures, …); may
       // expand one codepoint to several, each re-checked for whitespace.
       final mapped = nfkcCompat[raw];
@@ -124,6 +125,11 @@ class UnigramTokenizer {
             cp == 0x0C ||
             cp == 0xA0 ||
             (cp >= 0x2000 && cp <= 0x200A) ||
+            // zero-width / BOM: SentencePiece's normalizer maps these to space.
+            cp == 0x200B ||
+            cp == 0x200C ||
+            cp == 0x200D ||
+            cp == 0xFEFF ||
             cp == 0x3000;
         if (isSpace) {
           if (!prevSpace) sb.write(' ');
@@ -135,7 +141,10 @@ class UnigramTokenizer {
       }
     }
     var s = sb.toString().replaceAll(' ', replacement);
-    if (addPrefixSpace && !s.startsWith(replacement)) s = '$replacement$s';
+    // Don't synthesize a lone ▁ for empty input (SentencePiece emits nothing).
+    if (addPrefixSpace && s.isNotEmpty && !s.startsWith(replacement)) {
+      s = '$replacement$s';
+    }
     return s;
   }
 
