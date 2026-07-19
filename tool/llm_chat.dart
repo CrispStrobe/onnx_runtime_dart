@@ -31,7 +31,10 @@ double _argDouble(List<String> a, String flag, double def) {
 }
 
 void main(List<String> args) {
-  final model = loadOnnxModel(args[0]);
+  // last-token-logits skips the wasted prompt-row vocab projections in prefill;
+  // greedy/sampling only reads the last row anyway. --full-logits disables it.
+  final model =
+      loadOnnxModel(args[0], lastTokenLogits: !args.contains('--full-logits'));
   final tok = BpeTokenizer.fromFile(args[1]);
   final userPrompt = args[2];
   final maxNew = _argInt(args, '--max', 128);
@@ -102,7 +105,9 @@ void main(List<String> args) {
     final logits = out['logits']!;
     final vocab = logits.shape[2];
     final lf = logits.f ?? logits.asFloatList();
-    final base = (seq - 1) * vocab; // last position's row
+    // Row of the last position — logits may already be sliced to [1,1,vocab]
+    // (lastTokenLogits) or carry every position ([1,seq,vocab]).
+    final base = (logits.shape[1] - 1) * vocab;
     final next = _pickToken(lf, base, vocab, temp, topK, rng);
 
     if (eosIds.contains(next)) break;

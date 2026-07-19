@@ -1,6 +1,6 @@
 name: onnx_runtime_dart
 description: A pure-Dart ONNX inference runtime for transformer-style models — no FFI, runs on every target including web and WebAssembly.
-version: 0.4.2
+version: 0.5.0
 repository: https://github.com/CrispStrobe/onnx_runtime_dart
 topics:
   - onnx

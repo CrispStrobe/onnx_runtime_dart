@@ -52,8 +52,15 @@ class OnnxModel {
   /// the native (`dart:io`) platforms.
   /// [fuse] controls the load-time pattern fusion (GELU/SDPA/RMSNorm);
   /// disable it to execute the graph exactly node-by-node (diagnostics).
+  /// [lastTokenLogits] rewrites a `logits = MatMul(hidden, vocab_weight)`
+  /// output so only the final sequence position is projected (output becomes
+  /// `[…, 1, vocab]`). For autoregressive generation the prompt's vocab matmul
+  /// is the biggest prefill op yet only the last row is ever sampled, so this
+  /// skips the wasted `seq-1` rows. Opt-in: it changes the logits' seq extent.
   factory OnnxModel.fromBytes(Uint8List bytes,
-      {ExternalDataResolver? externalData, bool fuse = true}) {
+      {ExternalDataResolver? externalData,
+      bool fuse = true,
+      bool lastTokenLogits = false}) {
     // ModelProto.fromBuffer parses untrusted bytes. The protobuf decoder
     // signals malformed data with an Exception (InvalidProtocolBufferException),
     // but a corrupt length-delimited field can instead leak a RangeError from
@@ -70,8 +77,10 @@ class OnnxModel {
       // GUARD:protobuf_leak <<<
       rethrow;
     }
-    return OnnxModel._(
-        OnnxGraphExecutor(proto, externalData: externalData, fuse: fuse));
+    return OnnxModel._(OnnxGraphExecutor(proto,
+        externalData: externalData,
+        fuse: fuse,
+        lastTokenLogits: lastTokenLogits));
   }
 
   /// The graph inputs a caller must feed (excluding those with initializer

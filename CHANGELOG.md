@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.5.0
+
+- **`lastTokenLogits` — faster autoregressive prefill.** New opt-in on
+  `OnnxModel.fromBytes` / `loadOnnxModel`: a load-time rewrite that inserts a
+  slice before a `logits = MatMul(hidden[…, seq, h], W[h, vocab])` output so
+  only the **final** sequence position is projected (logits become
+  `[…, 1, vocab]`). A greedy/sampled generator only ever reads that last row,
+  so the prompt's other `seq-1` vocab-projection rows — the single largest
+  prefill op — are pure waste. Bitwise identical to the full run's last row
+  (verified max|Δ|=0); SmolLM2 greedy generation stays token-for-token
+  identical. Measured **1.17–1.21× less prefill MatMul** at a 64-token prompt
+  (SmolLM2 / Qwen2.5-0.5B), growing with prompt length. Opt-in because it
+  changes the logits' sequence extent; `tool/llm_chat.dart` enables it by
+  default (`--full-logits` to disable).
+- Investigated and **ruled out** two decode levers via measurement, recorded
+  so they aren't re-attempted: the isolate pool does not speed up single-token
+  decode (per-matmul round-trip overhead across ~169 small matmuls cancels the
+  parallel compute), and int8 weight *storage* is ~3× **slower** in pure Dart
+  (like fp16, the non-vectorizable per-element upcast costs more than the
+  4×-smaller reads save).
+
 ## 0.4.2
 
 - **Another ~1.9× on LLM decode (≈5× total vs 0.3.x).** The single-row GEMV

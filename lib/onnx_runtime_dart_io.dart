@@ -16,7 +16,7 @@ import 'onnx_runtime_dart.dart';
 ///
 /// External weights are read on demand with random access, so a model with a
 /// multi-gigabyte `.onnx.data` file is not loaded into memory all at once.
-OnnxModel loadOnnxModel(String path) {
+OnnxModel loadOnnxModel(String path, {bool lastTokenLogits = false}) {
   final file = File(path);
   final dir = file.parent.path;
   final open = <String, RandomAccessFile>{};
@@ -29,7 +29,8 @@ OnnxModel loadOnnxModel(String path) {
   }
 
   try {
-    return OnnxModel.fromBytes(file.readAsBytesSync(), externalData: resolve);
+    return OnnxModel.fromBytes(file.readAsBytesSync(),
+        externalData: resolve, lastTokenLogits: lastTokenLogits);
   } finally {
     for (final raf in open.values) {
       raf.closeSync();

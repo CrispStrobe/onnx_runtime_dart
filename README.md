@@ -86,6 +86,12 @@ is a complete **text-in / text-out** demo (byte-level BPE tokenizer loaded
 from `tokenizer.json`, ChatML prompt, greedy + temperature/top-k sampling);
 `tool/smollm2_generate.dart` is a greedy loop checked token-for-token against ORT.
 
+Two decode-oriented speedups: the GEMM kernel has a single-row (`m==1`) GEMV
+path with aligned vector loads (~5× faster decode vs a naive pack-and-tile
+kernel, bitwise identical), and `loadOnnxModel(path, lastTokenLogits: true)`
+slices the vocab projection to the last position so prefill skips the prompt's
+wasted `seq-1` logit rows (1.2×+ less prefill MatMul, last row bit-exact).
+
 ### Sequence-to-sequence & OCR
 
 | Model | HF repo | Notes | Parity |

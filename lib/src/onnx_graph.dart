@@ -78,7 +78,9 @@ class OnnxGraphExecutor {
   late final int _opset;
 
   OnnxGraphExecutor(ModelProto model,
-      {ExternalDataResolver? externalData, bool fuse = true})
+      {ExternalDataResolver? externalData,
+      bool fuse = true,
+      bool lastTokenLogits = false})
       : _graph = model.graph,
         _ext = externalData {
     _opset = model.opsetImport
@@ -90,7 +92,9 @@ class OnnxGraphExecutor {
       _initializerElemType[t.name] = t.dataType;
     }
     final folded = _foldConstants();
-    _nodes = fuse ? _fusePatterns(folded) : folded;
+    var nodes = fuse ? _fusePatterns(folded) : folded;
+    if (lastTokenLogits) nodes = _sliceLogitsToLastToken(nodes);
+    _nodes = nodes;
   }
 
   /// The graph inputs a caller must feed (graph inputs that aren't also
@@ -354,6 +358,79 @@ class OnnxGraphExecutor {
         else if (!removed.contains(n))
           n
     ];
+  }
+
+  /// Autoregressive-decode rewrite: for each graph output that is a large
+  /// projection — `logits = [Cast]* <- MatMul(hidden[…, seq, h], W[h, vocab])`
+  /// — insert a `_SliceLastSeq` before the MatMul so only the **last** sequence
+  /// position is projected. During prefill (seq ≫ 1) the vocab matmul is the
+  /// single largest op; a greedy/sampled generator only ever reads the last
+  /// row, so computing the other `seq-1` rows is pure waste. Output logits
+  /// become `[…, 1, vocab]`. Opt-in (changes the output's seq extent), so the
+  /// full-sequence parity path is unaffected.
+  List<NodeProto> _sliceLogitsToLastToken(List<NodeProto> nodes) {
+    final producers = {
+      for (final n in nodes)
+        for (final o in n.output) o: n
+    };
+    // Identity-keyed: NodeProto uses value equality, and we mutate the matmul's
+    // input below, which would change a value-based hash out from under the map.
+    final inserts = Map<NodeProto, NodeProto>.identity();
+    for (final out in _graph.output) {
+      // Peel Cast/Identity wrappers off the output to reach the projection.
+      var name = out.name;
+      var node = producers[name];
+      while (node != null &&
+          (node.opType == 'Cast' || node.opType == 'Identity') &&
+          node.input.isNotEmpty) {
+        name = node.input[0];
+        node = producers[name];
+      }
+      if (node == null || node.opType != 'MatMul' || inserts.containsKey(node)) {
+        continue;
+      }
+      // Only the vocab-sized projection is worth slicing (skip small heads).
+      final w = _initializers[node.input[1]];
+      if (w == null || w.shape.length != 2 || w.shape.last < 8192) continue;
+      final act = node.input[0];
+      final sliced = '${act}__lasttok';
+      inserts[node] = NodeProto()
+        ..opType = '_SliceLastSeq'
+        ..name = 'lasttok_$name'
+        ..input.add(act)
+        ..output.add(sliced);
+      node.input[0] = sliced; // matmul now consumes only the last position
+    }
+    if (inserts.isEmpty) return nodes;
+    return [
+      for (final n in nodes) ...[
+        if (inserts.containsKey(n)) inserts[n]!,
+        n,
+      ]
+    ];
+  }
+
+  /// Keeps only the last index along the second-to-last axis (the sequence
+  /// axis of a `[…, seq, hidden]` activation): `x[…, seq-1:seq, :]`. Used by the
+  /// last-token-logits rewrite so the vocab projection runs on one row.
+  static Tensor _sliceLastSeq(Tensor x) {
+    final rank = x.shape.length;
+    final axis = rank - 2;
+    final seq = x.shape[axis];
+    final inner = x.shape.sublist(axis + 1).fold<int>(1, (a, b) => a * b);
+    final outer = x.shape.sublist(0, axis).fold<int>(1, (a, b) => a * b);
+    if (seq <= 1) return x; // already single-position
+    final newShape = [...x.shape]..[axis] = 1;
+    final xf = x.f ?? x.asFloatList();
+    final out = Float32List(outer * inner);
+    for (int o = 0; o < outer; o++) {
+      final src = (o * seq + (seq - 1)) * inner;
+      final dst = o * inner;
+      for (int i = 0; i < inner; i++) {
+        out[dst + i] = xf[src + i];
+      }
+    }
+    return Tensor.float(out, newShape);
   }
 
   /// Executes every node whose inputs are all compile-time constants once,
@@ -851,6 +928,8 @@ class OnnxGraphExecutor {
       case 'Identity':
         return [need(0)];
       // --- synthetic fused ops (created by _fusePatterns, never in files) ---
+      case '_SliceLastSeq':
+        return [_sliceLastSeq(need(0))];
       case '_FusedGelu':
         return [ops.opGelu(need(0))];
       case '_FusedRMSNorm':

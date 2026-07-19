@@ -14,7 +14,8 @@ import 'package:onnx_runtime_dart/onnx_runtime_dart.dart';
 import 'package:onnx_runtime_dart/onnx_runtime_dart_io.dart';
 
 Future<void> main(List<String> args) async {
-  final model = loadOnnxModel(args[0]);
+  final model =
+      loadOnnxModel(args[0], lastTokenLogits: args.contains('--lasttok'));
   final wk = args.indexOf('--workers');
   final workers = wk >= 0 ? int.parse(args[wk + 1]) : 0;
   if (workers > 0) await model.parallelize(workers: workers);
@@ -62,7 +63,7 @@ Future<void> main(List<String> args) async {
         : model.run(inputs, outNames);
     final logits = out['logits']!;
     final vocab = logits.shape[2];
-    final base = (seq - 1) * vocab; // last token's row
+    final base = (logits.shape[1] - 1) * vocab; // last token's row
     final lf = logits.f ?? logits.asFloatList();
     var best = 0;
     var bestV = lf[base];
