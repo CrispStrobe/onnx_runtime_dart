@@ -828,6 +828,31 @@ def main():
          initializers={"seqlens": np.array([Pk + Sq - 1], dtype=np.int32),
                        "total": np.array(Pk + Sq, dtype=np.int32)},
          n_outputs=3, ms_domain=True)
+    # GQA with a populated cache AND internal RoPE (do_rotary=1): query/key
+    # positions are offset by the past length (pastLen..pastLen+S-1). Covers
+    # the position-offset RoPE branch that external-RoPE decoders (SmolLM2)
+    # never exercise. ORT requires head_size % 16 == 0 with internal rotary,
+    # so use 16 here; cos/sin caches are [max_seq, head_size/2].
+    hsg2 = 16
+    maxp = 16
+    rang = (np.arange(hsg2 // 2) / (hsg2 // 2)).astype(np.float32)
+    rpos = np.arange(maxp)[:, None] * rang[None, :]
+    emit("gqa_kvcache_rotary",
+         [helper.make_node("GroupQueryAttention",
+                           ["q", "k", "v", "past_key", "past_value",
+                            "seqlens", "total", "cosc", "sinc"],
+                           ["out0", "out1", "out2"],
+                           num_heads=NH, kv_num_heads=KVh, do_rotary=1,
+                           domain="com.microsoft")],
+         {"q": f32(B, Sq, NH * hsg2), "k": f32(B, Sq, KVh * hsg2),
+          "v": f32(B, Sq, KVh * hsg2),
+          "past_key": f32(B, KVh, Pk, hsg2),
+          "past_value": f32(B, KVh, Pk, hsg2)},
+         initializers={"seqlens": np.array([Pk + Sq - 1], dtype=np.int32),
+                       "total": np.array(Pk + Sq, dtype=np.int32),
+                       "cosc": np.cos(rpos).astype(np.float32),
+                       "sinc": np.sin(rpos).astype(np.float32)},
+         n_outputs=3, ms_domain=True)
 
     # RotaryEmbedding: input [B,S,NH*hs], non-interleaved, full-head rotation.
     maxpos = 16

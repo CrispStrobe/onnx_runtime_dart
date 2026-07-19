@@ -13,8 +13,11 @@ import 'dart:typed_data';
 import 'package:onnx_runtime_dart/onnx_runtime_dart.dart';
 import 'package:onnx_runtime_dart/onnx_runtime_dart_io.dart';
 
-void main(List<String> args) {
+Future<void> main(List<String> args) async {
   final model = loadOnnxModel(args[0]);
+  final wk = args.indexOf('--workers');
+  final workers = wk >= 0 ? int.parse(args[wk + 1]) : 0;
+  if (workers > 0) await model.parallelize(workers: workers);
   final ref = jsonDecode(File(args[1]).readAsStringSync()) as Map<String, dynamic>;
   final prompt = (ref['prompt'] as List).cast<int>();
   final nNew = ref['n_new'] as int;
@@ -54,7 +57,9 @@ void main(List<String> args) {
           [1, seq]),
       ...past,
     };
-    final out = model.run(inputs, outNames);
+    final out = workers > 0
+        ? await model.runAsync(inputs, outNames)
+        : model.run(inputs, outNames);
     final logits = out['logits']!;
     final vocab = logits.shape[2];
     final base = (seq - 1) * vocab; // last token's row
