@@ -78,7 +78,14 @@ typedef ExternalDataResolver = Uint8List Function(
 
 /// The raw little-endian bytes of [t] — either inline `raw_data` or, for
 /// external tensors, resolved from the companion file via [ext].
-Uint8List _rawBytes(TensorProto t, ExternalDataResolver? ext) {
+///
+/// [expectedBytes] is the byte count implied by the tensor's shape and dtype;
+/// it's the fallback when the `length` field of the external-data entry is
+/// absent or 0 (some exporters — e.g. certain Optimum fp16 exports — emit
+/// `length: 0` and expect the reader to derive it from the shape, as ORT
+/// does).
+Uint8List _rawBytes(TensorProto t, ExternalDataResolver? ext,
+    int expectedBytes) {
   if (t.dataLocation == TensorProto_DataLocation.EXTERNAL) {
     if (ext == null) {
       throw StateError('"${t.name}" stores its weights externally — load the '
@@ -97,7 +104,7 @@ Uint8List _rawBytes(TensorProto t, ExternalDataResolver? ext) {
           length = int.parse(e.value);
       }
     }
-    return ext(location, offset, length);
+    return ext(location, offset, length > 0 ? length : expectedBytes);
   }
   return Uint8List.fromList(t.rawData);
 }
@@ -151,7 +158,7 @@ Tensor tensorFromProto(TensorProto t, {ExternalDataResolver? ext}) {
       _needInlineLen(t, t.floatData.length, n);
       return Tensor.float(Float32List.fromList(t.floatData), shape);
     }
-    final bytes = _rawBytes(t, ext);
+    final bytes = _rawBytes(t, ext, n * 4);
     _needRawLen(t, bytes.length, n, 4);
     final bd = ByteData.sublistView(bytes);
     final out = Float32List(n);
@@ -166,7 +173,7 @@ Tensor tensorFromProto(TensorProto t, {ExternalDataResolver? ext}) {
           Int64List.fromList(t.int64Data.map((v) => v.toInt()).toList()),
           shape);
     }
-    final bytes = _rawBytes(t, ext);
+    final bytes = _rawBytes(t, ext, n * 8);
     _needRawLen(t, bytes.length, n, 8);
     final bd = ByteData.sublistView(bytes);
     final out = Int64List(n);
@@ -179,7 +186,7 @@ Tensor tensorFromProto(TensorProto t, {ExternalDataResolver? ext}) {
       _needInlineLen(t, t.int32Data.length, n);
       return Tensor.int64(Int64List.fromList(t.int32Data), shape);
     }
-    final bytes = _rawBytes(t, ext);
+    final bytes = _rawBytes(t, ext, n * 4);
     _needRawLen(t, bytes.length, n, 4);
     final bd = ByteData.sublistView(bytes);
     final out = Int64List(n);
@@ -197,7 +204,7 @@ Tensor tensorFromProto(TensorProto t, {ExternalDataResolver? ext}) {
       }
       return Tensor.float(out, shape);
     }
-    final bytes = _rawBytes(t, ext);
+    final bytes = _rawBytes(t, ext, n * 8);
     _needRawLen(t, bytes.length, n, 8);
     final bd = ByteData.sublistView(bytes);
     final out = Float32List(n);
@@ -207,7 +214,7 @@ Tensor tensorFromProto(TensorProto t, {ExternalDataResolver? ext}) {
     return Tensor.float(out, shape);
   } else if (t.dataType == _kFloat16) {
     // Half-precision weights, widened to float32 (bit-exact).
-    final bytes = _rawBytes(t, ext);
+    final bytes = _rawBytes(t, ext, n * 2);
     _needRawLen(t, bytes.length, n, 2);
     final src = ByteData.sublistView(bytes);
     final out = Float32List(n);
@@ -226,14 +233,14 @@ Tensor tensorFromProto(TensorProto t, {ExternalDataResolver? ext}) {
           ? Tensor.int8(Int8List.fromList(t.int32Data), shape)
           : Tensor.uint8(Uint8List.fromList(t.int32Data), shape);
     }
-    final bytes = _rawBytes(t, ext);
+    final bytes = _rawBytes(t, ext, n * 1);
     _needRawLen(t, bytes.length, n, 1);
     return signed
         ? Tensor.int8(Int8List.sublistView(bytes, 0, n), shape)
         : Tensor.uint8(Uint8List.sublistView(bytes, 0, n), shape);
   } else if (t.dataType == _kBool) {
     // BOOL is one byte per element, carried as int64 0/1.
-    final bytes = _rawBytes(t, ext);
+    final bytes = _rawBytes(t, ext, n * 1);
     _needRawLen(t, bytes.length, n, 1);
     final out = Int64List(n);
     for (int i = 0; i < n; i++) {

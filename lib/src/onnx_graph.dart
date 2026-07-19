@@ -1012,6 +1012,14 @@ class OnnxGraphExecutor {
         return [ops.opLog(need(0))];
       case 'Not':
         return [ops.opNot(need(0))];
+      case 'IsNaN':
+        return [ops.opIsNaN(need(0))];
+      case 'IsInf':
+        return [
+          ops.opIsInf(need(0),
+              detectPositive: (attrs.getInt('detect_positive') ?? 1) != 0,
+              detectNegative: (attrs.getInt('detect_negative') ?? 1) != 0)
+        ];
       case 'Equal':
         return [ops.opEqual(need(0), need(1))];
       case 'Greater':

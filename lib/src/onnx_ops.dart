@@ -1669,6 +1669,36 @@ Tensor opOr(Tensor a, Tensor b) =>
     _boolBinary(a, b, (x, y) => x != 0 || y != 0);
 Tensor opNot(Tensor a) => _unaryInt(a, (x) => x != 0 ? 0 : 1);
 
+/// `IsNaN` / `IsInf` — bool (int64 0/1) mask over a float tensor. Integer
+/// tensors are never NaN/Inf, so the result is all-zero.
+Tensor opIsNaN(Tensor a) {
+  final n = a.length;
+  final out = Int64List(n);
+  if (a.isFloat) {
+    final af = a.f!;
+    for (int k = 0; k < n; k++) {
+      out[k] = af[k].isNaN ? 1 : 0;
+    }
+  }
+  return Tensor.int64(out, a.shape);
+}
+
+Tensor opIsInf(Tensor a, {bool detectPositive = true, bool detectNegative = true}) {
+  final n = a.length;
+  final out = Int64List(n);
+  if (a.isFloat) {
+    final af = a.f!;
+    for (int k = 0; k < n; k++) {
+      final v = af[k];
+      out[k] = (v.isInfinite &&
+              ((v > 0 && detectPositive) || (v < 0 && detectNegative)))
+          ? 1
+          : 0;
+    }
+  }
+  return Tensor.int64(out, a.shape);
+}
+
 Tensor opMax(List<Tensor> ins) =>
     ins.reduce((a, b) => _elementwiseBinary(a, b, math.max));
 Tensor opMin(List<Tensor> ins) =>

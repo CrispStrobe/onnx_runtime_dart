@@ -467,6 +467,15 @@ def main():
     emit("atan",
          [helper.make_node("Atan", ["x"], ["out0"])],
          {"x": (f32(3, 7) * 4)})
+    nan_x = f32(2, 6)
+    nan_x[0, 1] = np.nan; nan_x[0, 3] = np.inf; nan_x[1, 0] = -np.inf
+    emit("isnan_isinf",
+         [helper.make_node("IsNaN", ["x"], ["nan_"]),
+          helper.make_node("IsInf", ["x"], ["inf_"]),
+          helper.make_node("Cast", ["nan_"], ["nf"], to=TensorProto.INT64),
+          helper.make_node("Cast", ["inf_"], ["if_"], to=TensorProto.INT64),
+          helper.make_node("Concat", ["nf", "if_"], ["out0"], axis=0)],
+         {"x": nan_x})
     emit("sign_float_int",
          [helper.make_node("Sign", ["x"], ["f"]),
           helper.make_node("Sign", ["xi"], ["i_"]),

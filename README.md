@@ -52,6 +52,9 @@ linked).
 | ms-marco-MiniLM-L-6-v2 `†` | `cross-encoder/ms-marco-MiniLM-L-6-v2` | BERT cross-encoder | 1.0 |
 | mxbai-rerank-xsmall-v1 | `mixedbread-ai/mxbai-rerank-xsmall-v1` | DeBERTa-v2, disentangled attention | 1.0 |
 | mxbai-rerank-base-v1 | `mixedbread-ai/mxbai-rerank-base-v1` | DeBERTa-v2 | 1.0 |
+| F2LLM-v2-0.6B `†` | `cstr/F2LLM-v2-0.6B-ONNX` | Qwen3 decoder | int8 dynamic-quant band (0.997) |
+| jina-embeddings-v5-small `†` | `jinaai/jina-embeddings-v5-text-small-retrieval` | Qwen3, `IsNaN` attention masking | 1.0 (fp16 export) |
+| partitura-jina `†` | jina variant (local export) | BERT/jina | 1.0 |
 
 ### Quantized language models (int4 / int8)
 
@@ -68,6 +71,7 @@ linked).
 |---|---|---|---|
 | NLLB-200-600M (enc + dec + `decoder_with_past`) `†` | `facebook/nllb-200-distilled-600M` (Optimum ONNX export) | full translation loop, KV cache, 256k-vocab logits + all present-KV; `Trilu`, `ScatterND`, external-data `Constant` | 1.0 |
 | TrOCR (ViT encoder + text decoder) `†` | `microsoft/trocr-*` (local ONNX export) | image → text | 1.0 |
+| CrispTranslator (enc + dec) `†` | NLLB-family, int8 dynamic-quant (local export) | `MatMulInteger`+`DynamicQuantizeLinear`; 256k-vocab logits, KV outputs exact | dynamic-int8 band (enc 0.9999, dec 0.998) |
 
 ### Vision
 
