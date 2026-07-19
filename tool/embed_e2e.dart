@@ -1,6 +1,7 @@
-/// End-to-end text -> embedding in pure Dart: WordPiece tokenize -> ONNX ->
-/// masked mean-pool -> L2 normalize, checked against a sentence-transformers
-/// reference. Proves the embedding family is usable with no external tokenizer.
+/// End-to-end text -> embedding in pure Dart: tokenize (WordPiece or Unigram,
+/// auto-detected from the tokenizer.json) -> ONNX -> masked mean-pool -> L2
+/// normalize, checked against a sentence-transformers reference. Proves the
+/// embedder family is usable with no external tokenizer.
 ///   dart run tool/embed_e2e.dart MODEL.onnx TOKENIZER.json REF.json
 library;
 
@@ -10,14 +11,20 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 import 'package:onnx_runtime_dart/onnx_runtime_dart.dart';
 import 'package:onnx_runtime_dart/onnx_runtime_dart_io.dart';
+List<int> Function(String) _tokenizer(String path){
+  final j=jsonDecode(File(path).readAsStringSync()) as Map<String,dynamic>;
+  final type=(j['model'] as Map<String,dynamic>)['type'];
+  if(type=='Unigram'){final t=UnigramTokenizer.fromFile(path); return t.encode;}
+  final t=WordPieceTokenizer.fromFile(path); return t.encode;
+}
 void main(List<String> a){
   final model=loadOnnxModel(a[0]);
-  final tok=WordPieceTokenizer.fromFile(a[1]);
+  final encode=_tokenizer(a[1]);
   final ref=jsonDecode(File(a[2]).readAsStringSync()) as List;
   var worst=1.0;
   for(final c in ref){
     final text=c['text'] as String;
-    final ids=tok.encode(text);
+    final ids=encode(text);
     final refIds=(c['ids'] as List).cast<int>();
     final idsOk=ids.length==refIds.length && List.generate(ids.length,(i)=>ids[i]==refIds[i]).every((x)=>x);
     final n=ids.length;

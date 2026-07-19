@@ -241,10 +241,11 @@ models are usable with no external tokenizer — the same code runs on web/WASM:
   tokens. Drives the generative decoders.
 
 All three are validated for **exact** id-match against the reference
-`tokenizers` library (WordPiece and Unigram across accented, CJK, Cyrillic,
-Greek and full-width text). A full **text → embedding** pipeline (WordPiece →
-ONNX → masked mean-pool → L2-normalize) matches `sentence-transformers` at
-cosine 1.0 (`tool/embed_e2e.dart`); `tool/llm_chat.dart` is the generative
+`tokenizers` library (across cased/uncased, accented, CJK, Cyrillic, Greek and
+full-width text). Full **text → embedding** pipelines match
+`sentence-transformers` at **cosine 1.0** end-to-end (`tool/embed_e2e.dart`):
+WordPiece → all-MiniLM-L6, and Unigram → multilingual-e5-small (English,
+German, Japanese, Russian). `tool/llm_chat.dart` is the generative
 text-in/text-out counterpart.
 
 ```dart

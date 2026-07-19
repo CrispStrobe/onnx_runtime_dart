@@ -27,4 +27,12 @@ void main() {
     expect(tok.tokens('tokenization'),
         ['[CLS]', 'token', '##ization', '[SEP]']);
   });
+
+  test('cased config preserves case and accents', () {
+    final cased = WordPieceTokenizer.fromFile('test/data/tiny_wordpiece_cased.json');
+    // lowercase=false, strip_accents=false: "Hello" and "Café" stay intact.
+    expect(cased.tokens('Hello, World!'),
+        ['[CLS]', 'Hello', ',', 'World', '!', '[SEP]']);
+    expect(cased.tokens('Caf\u00e9'), ['[CLS]', 'Caf\u00e9', '[SEP]']);
+  });
 }
