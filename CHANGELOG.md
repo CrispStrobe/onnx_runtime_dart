@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.9.1
+
+- **Security: external-data path traversal + unbounded allocation closed.**
+  `loadOnnxModel` resolved a model-declared external-data `location` as
+  `<model-dir>/<location>` and read `length` bytes at `offset` with no
+  validation — so a hostile `.onnx` could read **arbitrary files** (e.g.
+  `location: "../../../../etc/passwd"`) or trigger a multi-terabyte allocation
+  (`length: 1e12`). New `checkExternalRef` guard (mutverified) requires a
+  bounded relative path inside the model's own directory and an
+  `[offset, offset+length)` range within the companion file, rejecting
+  violations with `FormatException`. Verified end-to-end (a traversal model is
+  rejected, not read) and by a dedicated fuzz harness (`tool/fuzz/external_data.dart`).
+- `covfuzz_discover` sweep confirmed the remaining parse entry points;
+  `BpeTokenizer.decode` is now covered by a robustness test (tolerates any ids)
+  and the tokenizer-text fuzzer.
+
 ## 0.9.0
 
 - **Reader-robustness hardening, driven by `covfuzz`** (blind + coverage-guided

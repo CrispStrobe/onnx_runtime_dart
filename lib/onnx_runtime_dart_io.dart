@@ -22,8 +22,11 @@ OnnxModel loadOnnxModel(String path, {bool lastTokenLogits = false}) {
   final open = <String, RandomAccessFile>{};
 
   Uint8List resolve(String location, int offset, int length) {
-    final raf =
-        open.putIfAbsent(location, () => File('$dir/$location').openSync());
+    final raf = open.putIfAbsent(location, () {
+      checkExternalRef(location, 0, 0, 0); // path safety before touching disk
+      return File('$dir/$location').openSync();
+    });
+    checkExternalRef(location, offset, length, raf.lengthSync());
     raf.setPositionSync(offset);
     return raf.readSync(length);
   }
@@ -36,4 +39,30 @@ OnnxModel loadOnnxModel(String path, {bool lastTokenLogits = false}) {
       raf.closeSync();
     }
   }
+}
+
+/// Guards a model-declared external-data reference before it touches disk. A
+/// hostile `.onnx` must not read arbitrary files or trigger a huge allocation:
+/// [location] must be a plain relative path inside the model's own directory
+/// (no `..`, no absolute path, no drive/volume), and `[offset, offset+length)`
+/// must lie within the companion file's [fileLen] bytes. Violations reject with
+/// [FormatException] — the documented reject type — never a leaked
+/// `FileSystemException`/`RangeError`/OOM. (guard:extdata)
+void checkExternalRef(String location, int offset, int length, int fileLen) {
+  // GUARD:extdata >>>
+  if (location.isEmpty ||
+      location.contains('..') ||
+      location.startsWith('/') ||
+      location.startsWith(r'\') ||
+      location.contains(':')) {
+    throw FormatException('unsafe external-data location: "$location"');
+  }
+  if (offset < 0 ||
+      length < 0 ||
+      length > fileLen ||
+      offset > fileLen - length) {
+    throw FormatException('external-data range [$offset, +$length) lies outside '
+        'the companion file ($fileLen bytes)');
+  }
+  // GUARD:extdata <<<
 }

@@ -12,8 +12,9 @@ hang, or take multiple seconds.
 |---|---|---|---|
 | `onnx_bytes.dart` | `OnnxModel.fromBytes` | ONNX protobuf bytes | `FormatException`, `UnsupportedError` |
 | `onnx_bytes_cov.dart` | same, **coverage-guided** | reaches tensor-loading / folding / fusion behind valid protobuf | same |
-| `tokenizer_text.dart` | `*.encode` / `encodePair` | runtime user text | *(none — encode is total)* |
+| `tokenizer_text.dart` | `*.encode` / `encodePair` / `decode` | runtime user text / ids | *(none — total)* |
 | `tokenizer_json.dart` | `*.fromJson` | a `tokenizer.json` config | `FormatException` |
+| `external_data.dart` | `checkExternalRef` | a model's external-data `location`/`offset`/`length` (path traversal, over-read) | `FormatException` |
 
 ## Run
 
@@ -54,6 +55,10 @@ reproducer), `2` clean-but-slow. `FUZZ_BUDGET_MS` / `FUZZ_ITERS` shorten a run
   → `FormatException` (was leaking `InvalidProtocolBufferException`).
 - `wp_config` / `uni_config` / `bpe_config` (tokenizers) — a malformed
   `tokenizer.json` → `FormatException` (was leaking cast/type errors).
+- `extdata` (`lib/onnx_runtime_dart_io.dart`) — a model's external-data
+  reference must be a bounded relative path inside the model's directory →
+  `FormatException`, closing a **path-traversal** (arbitrary file read) and an
+  unbounded-allocation hole.
 
 The regression tests are the permanent gate and run in `dart test`; the
 harnesses above are for periodic deep runs and finding new issues.

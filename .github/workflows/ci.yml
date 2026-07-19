@@ -34,3 +34,6 @@ jobs:
       - name: Fuzz tokenizer encode paths (blind, 20s)
         env: { FUZZ_BUDGET_MS: '20000', FUZZ_ITERS: '2000000' }
         run: dart run tool/fuzz/tokenizer_text.dart
+      - name: Fuzz external-data ref guard (blind, 15s)
+        env: { FUZZ_BUDGET_MS: '15000', FUZZ_ITERS: '3000000' }
+        run: dart run tool/fuzz/external_data.dart
