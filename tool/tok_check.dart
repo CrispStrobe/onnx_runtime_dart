@@ -5,7 +5,7 @@ library;
 import 'dart:convert';
 import 'dart:io';
 
-import 'bpe_tokenizer.dart';
+import 'package:onnx_runtime_dart/onnx_runtime_dart.dart';
 
 void main(List<String> args) {
   final tok = BpeTokenizer.fromFile(args[0]);

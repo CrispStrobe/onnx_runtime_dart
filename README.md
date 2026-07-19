@@ -223,6 +223,30 @@ file (read on demand, so multi-GB models don't load into memory all at once).
 See [`example/onnx_runtime_dart_example.dart`](example/onnx_runtime_dart_example.dart) for a
 self-contained, runnable graph built with the protobuf types.
 
+## Tokenizers (end-to-end text in / text out)
+
+Two pure-Dart tokenizers load a HuggingFace `tokenizer.json` directly, so text
+models are usable with no external tokenizer — the same code runs on web/WASM:
+
+- **`WordPieceTokenizer`** — the BERT `WordPiece` pipeline (`BertNormalizer`
+  incl. accent-stripping via a precomputed NFD table, `BertPreTokenizer`, greedy
+  `##` continuation, `[CLS]…[SEP]`). Covers the whole embedder/reranker family
+  (BERT / MiniLM / MPNet / GTE / E5 / mxbai …).
+- **`BpeTokenizer`** — byte-level BPE (GPT-2 / Qwen / Llama-BPE): the GPT-2
+  pre-tokenization regex, `bytes_to_unicode`, rank-ordered merges, added/special
+  tokens. Drives the generative decoders.
+
+Both are validated for **exact** id-match against the reference `tokenizers`
+library. A full **text → embedding** pipeline (WordPiece → ONNX → masked
+mean-pool → L2-normalize) matches `sentence-transformers` at cosine 1.0,
+including accented and CJK text (`tool/embed_e2e.dart`); `tool/llm_chat.dart`
+is the generative text-in/text-out counterpart.
+
+```dart
+final tok = WordPieceTokenizer.fromFile('tokenizer.json');
+final ids = tok.encode('Machine learning in pure Dart.'); // [101, 3698, ... , 102]
+```
+
 ## Supported operators
 
 - **Math:** `Add`, `Sub`, `Mul`, `Div`, `Pow`, `Sqrt`, `Reciprocal`, `Abs`,

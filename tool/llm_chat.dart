@@ -18,8 +18,6 @@ import 'dart:typed_data';
 import 'package:onnx_runtime_dart/onnx_runtime_dart.dart';
 import 'package:onnx_runtime_dart/onnx_runtime_dart_io.dart';
 
-import 'bpe_tokenizer.dart';
-
 int _argInt(List<String> a, String flag, int def) {
   final i = a.indexOf(flag);
   return i >= 0 ? int.parse(a[i + 1]) : def;

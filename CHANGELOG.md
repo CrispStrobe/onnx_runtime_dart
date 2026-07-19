@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.6.0
+
+- **Pure-Dart tokenizers — end-to-end text models with no external dependency.**
+  Two tokenizers load a HuggingFace `tokenizer.json` directly and run on every
+  target incl. web/WASM:
+  - `WordPieceTokenizer` — the BERT `WordPiece` pipeline (`BertNormalizer` with
+    accent-stripping via a precomputed NFD table since Dart core lacks Unicode
+    normalization, `BertPreTokenizer`, greedy `##` continuation, `[CLS]…[SEP]`).
+    Covers the embedder/reranker family (BERT / MiniLM / MPNet / GTE / E5 / mxbai).
+  - `BpeTokenizer` — byte-level BPE (GPT-2 / Qwen / Llama-BPE) for the
+    generative decoders.
+  Both validated for **exact** id-match against the reference `tokenizers`
+  library. A complete **text → embedding** pipeline (WordPiece → ONNX → masked
+  mean-pool → L2-normalize) matches `sentence-transformers` at **cosine 1.0**,
+  including accented (café→cafe) and CJK text. Now exported from the package
+  (previously reference impls under `tool/`).
+
 ## 0.5.0
 
 - **`lastTokenLogits` — faster autoregressive prefill.** New opt-in on
