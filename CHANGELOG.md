@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.10.3
+
+- **VITS / RVC / so-vits-svc family now runs.** Verified the full 4938-node RVC
+  NSF-HiFi-GAN + flow generator end-to-end at cosine **0.999943** vs onnxruntime.
+  Four op changes unblocked it:
+  - **`Clip` integer-dtype fix (bug).** `Clip` routed through the float-only
+    elementwise path, so `Clip(int64)` silently returned float — which then
+    null-crashed a downstream `int64` `Concat` (the VITS relative-attention
+    padding builds `Concat(Unsqueeze(Clip(len-1)), …)` over int64 shape
+    components). Integer inputs now keep their dtype; the float path is
+    unchanged.
+  - **`ReduceL2`** (new) — `sqrt(sum(x²))` over the given axes (the flow
+    weight-norm uses it heavily).
+  - **`Mod`** (new) — elementwise modulo with broadcasting and the `fmod`
+    attribute (the NSF source generator wraps sine phase with it).
+  - **`RandomUniform`** (new) — seeded/deterministic so a run is reproducible
+    (the NSF draws a little phase noise; won't bit-match onnxruntime's RNG, but
+    the sine synthesis dominates).
+
 ## 0.10.2
 
 - **~5× faster 2-D `ConvTranspose`.** The 2-D transposed convolution had only a
