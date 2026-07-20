@@ -1037,6 +1037,8 @@ class OnnxGraphExecutor {
         return [ops.opSub(need(0), need(1))];
       case 'Mul':
         return [ops.opMul(need(0), need(1))];
+      case 'Mod':
+        return [ops.opMod(need(0), need(1), (attrs.getInt('fmod') ?? 0) != 0)];
       case 'Div':
         return [ops.opDiv(need(0), need(1))];
       case 'Pow':
@@ -1179,6 +1181,15 @@ class OnnxGraphExecutor {
         return [attrs.constantTensor()];
       case 'ConstantOfShape':
         return [ops.opConstantOfShape(need(0), attrs.getTensor('value'))];
+      case 'RandomUniform':
+        return [
+          ops.opRandomUniform(
+            attrs.getInts('shape')!,
+            attrs.getFloat('low') ?? 0.0,
+            attrs.getFloat('high') ?? 1.0,
+            attrs.getFloat('seed')?.toInt(),
+          )
+        ];
       case 'Range':
         return [ops.opRange(need(0), need(1), need(2))];
       case 'Abs':
@@ -1244,6 +1255,16 @@ class OnnxGraphExecutor {
       case 'ReduceSumSquare':
         return [
           ops.opReduceSumSquare(
+            need(0),
+            ins.length > 1 && ins[1] != null
+                ? ins[1]!.asIntList()
+                : attrs.getInts('axes'),
+            (attrs.getInt('keepdims') ?? 1) != 0,
+          )
+        ];
+      case 'ReduceL2':
+        return [
+          ops.opReduceL2(
             need(0),
             ins.length > 1 && ins[1] != null
                 ? ins[1]!.asIntList()

@@ -398,6 +398,16 @@ Tensor opSub(Tensor a, Tensor b) =>
 Tensor opMul(Tensor a, Tensor b) =>
     _arithFloatFast(a, b, _Arith.mul) ??
     _elementwiseBinary(a, b, (x, y) => x * y);
+
+/// `Mod` — elementwise modulo with broadcasting. [fmod] true = C `fmod`
+/// (result takes the dividend's sign, `remainder`); false = integer/numpy mod
+/// (result takes the divisor's sign). The NSF source generator in RVC's decoder
+/// wraps sine phase with Mod.
+Tensor opMod(Tensor a, Tensor b, bool fmod) => _elementwiseBinary(
+      a,
+      b,
+      fmod ? (x, y) => x.remainder(y) : (x, y) => x % y,
+    );
 Tensor opDiv(Tensor a, Tensor b) {
   // Integer division truncates toward zero per the ONNX spec (the generic
   // path would round the float quotient — off by one on length arithmetic
@@ -545,6 +555,18 @@ Tensor opErf(Tensor a) {
 Tensor opClip(Tensor x, Tensor? min, Tensor? max) {
   final lo = min != null ? min.getD(0) : double.negativeInfinity;
   final hi = max != null ? max.getD(0) : double.infinity;
+  // Preserve integer dtype: Clip runs on int64 shape components (e.g. the
+  // VITS/RVC relative-attention padding builds `Concat(Unsqueeze(Clip(len-1)),
+  // ...)` over int64s) — a float result would break the downstream int64 Concat
+  // (`intData` null). Float inputs keep the fast float path.
+  if (!x.isFloat) {
+    final ai = x.intData;
+    final out = Int64List(ai.length);
+    for (var k = 0; k < ai.length; k++) {
+      out[k] = ai[k].toDouble().clamp(lo, hi).toInt();
+    }
+    return Tensor.int64(out, x.shape);
+  }
   return _elementwiseUnary(x, (v) => v.clamp(lo, hi));
 }
 
@@ -1005,6 +1027,33 @@ Tensor opReduceProd(Tensor x, List<int>? axes, bool keepdims) {
 Tensor opReduceSumSquare(Tensor x, List<int>? axes, bool keepdims) {
   final squared = opMul(x, x);
   return opReduceSum(squared, axes, keepdims);
+}
+
+/// `RandomUniform` — a [shape]-sized tensor of uniform `[low, high)` samples.
+/// Seeded (deterministic) so a run is reproducible (pooled == sync); the NSF
+/// source generator in RVC's decoder draws a little phase noise from it. Won't
+/// bit-match onnxruntime's RNG, but the sine synthesis dominates the output.
+Tensor opRandomUniform(List<int> shape, double low, double high, int? seed) {
+  final n = shape.fold<int>(1, (a, b) => a * b);
+  final rng = math.Random(seed ?? 1234567);
+  final out = Float32List(n);
+  final span = high - low;
+  for (var k = 0; k < n; k++) {
+    out[k] = low + span * rng.nextDouble();
+  }
+  return Tensor.float(out, shape);
+}
+
+/// `ReduceL2` — the L2 norm `sqrt(sum(x^2))` over the given axes (VITS/RVC flow
+/// weight-norm uses it heavily).
+Tensor opReduceL2(Tensor x, List<int>? axes, bool keepdims) {
+  final ss = opReduceSumSquare(x, axes, keepdims);
+  final f = ss.f!;
+  final out = Float32List(f.length);
+  for (var k = 0; k < f.length; k++) {
+    out[k] = math.sqrt(f[k]);
+  }
+  return Tensor.float(out, ss.shape);
 }
 
 /// `Split` — slices [x] along [axis] into [numOutputs] parts, sized by
