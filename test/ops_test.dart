@@ -3,6 +3,8 @@ import 'dart:typed_data';
 import 'package:fixnum/fixnum.dart';
 import 'package:onnx_runtime_dart/onnx_runtime_dart.dart';
 import 'package:onnx_runtime_dart/onnx_proto.dart';
+import 'package:onnx_runtime_dart/src/onnx_ops.dart'
+    show opRandomNormalFill, opRandomUniform;
 import 'package:test/test.dart';
 
 NodeProto node(String op, List<String> ins, String out,
@@ -32,10 +34,14 @@ void main() {
     final g = GraphProto()
       ..input.add(ValueInfoProto()..name = 'X')
       ..output.add(ValueInfoProto()..name = 'Y')
-      ..node.add(node('ReduceL2', ['X'], 'Y', [
-        intsAttr('axes', [-1]),
-        intAttr('keepdims', 0),
-      ]));
+      ..node.add(node(
+          'ReduceL2',
+          ['X'],
+          'Y',
+          [
+            intsAttr('axes', [-1]),
+            intAttr('keepdims', 0),
+          ]));
     // rows [3,4] and [5,12] → L2 = [5, 13].
     final x = Tensor.float(Float32List.fromList([3, 4, 5, 12]), [2, 2]);
     final y = modelOf(g).run({'X': x}, ['Y'])['Y']!;
@@ -71,21 +77,27 @@ void main() {
     final lo = Tensor.int64(Int64List.fromList([0]), []);
     final y = modelOf(g).run({'X': x, 'LO': lo}, ['Y'])['Y']!;
     expect(y.asIntList(), [0, 0, 5]);
-    expect(y.dtype, DType.int64); // NOT float — else a downstream int Concat breaks
+    expect(y.dtype,
+        DType.int64); // NOT float — else a downstream int Concat breaks
   });
 
-  test('RandomUniform fills the attr shape within [low,high) and is seeded', () {
+  test('RandomUniform fills the attr shape within [low,high) and is seeded',
+      () {
     AttributeProto floatsShape() => AttributeProto()
       ..name = 'shape'
       ..ints.addAll([Int64(2), Int64(3)]);
     final g = GraphProto()
       ..output.add(ValueInfoProto()..name = 'Y')
-      ..node.add(node('RandomUniform', [], 'Y', [
-        floatsShape(),
-        floatAttr('low', -1.0),
-        floatAttr('high', 1.0),
-        floatAttr('seed', 7),
-      ]));
+      ..node.add(node(
+          'RandomUniform',
+          [],
+          'Y',
+          [
+            floatsShape(),
+            floatAttr('low', -1.0),
+            floatAttr('high', 1.0),
+            floatAttr('seed', 7),
+          ]));
     final y = modelOf(g).run(const {}, ['Y'])['Y']!;
     expect(y.shape, [2, 3]);
     for (final v in y.asFloatList()) {
@@ -175,5 +187,31 @@ void main() {
     final x = Tensor.float(Float32List(24), [2, 3, 4]);
     final y = modelOf(g).run({'X': x}, ['Y'])['Y']!;
     expect(y.asIntList(), [3, 4]); // batch dim dropped
+  });
+
+  group('OnnxRandomInject (determinism harness)', () {
+    tearDown(() => OnnxRandomInject.provider = null);
+
+    test('RandomNormal uses an injected buffer, else mean-fills', () {
+      OnnxRandomInject.provider =
+          (op, shape) => Float32List.fromList([1, 2, 3, 4]);
+      expect(opRandomNormalFill([2, 2], 0.0).asFloatList(), [1, 2, 3, 4]);
+      OnnxRandomInject.provider = null;
+      expect(opRandomNormalFill([2, 2], 0.0).asFloatList(), [0, 0, 0, 0]);
+    });
+
+    test('length-routing: only a matching-length node consumes the buffer', () {
+      final siteB = Float32List.fromList([9, 9, 9]); // length 3
+      OnnxRandomInject.provider = (op, shape) => siteB;
+      expect(opRandomNormalFill([3], 0.0).asFloatList(), [9, 9, 9]);
+      // A length-1 node (e.g. RVC's phase draw) doesn't match → default draw.
+      expect(opRandomUniform([1], 0.0, 1.0, 7).asFloatList().first, isNot(9));
+    });
+
+    test('RandomUniform injection when the provider targets it', () {
+      OnnxRandomInject.provider = (op, shape) =>
+          op == 'RandomUniform' ? Float32List.fromList([0.5, 0.25]) : null;
+      expect(opRandomUniform([2], 0.0, 1.0, 1).asFloatList(), [0.5, 0.25]);
+    });
   });
 }

@@ -177,7 +177,8 @@ Tensor? _arithFloatFast(Tensor a, Tensor b, _Arith op) {
       b.rank == a.rank &&
       b.shape[a.rank - 1] == 1 &&
       a.shape[a.rank - 1] > 1 &&
-      _shapeEq(a.shape.sublist(0, a.rank - 1), b.shape.sublist(0, b.rank - 1))) {
+      _shapeEq(
+          a.shape.sublist(0, a.rank - 1), b.shape.sublist(0, b.rank - 1))) {
     final d = a.shape[a.rank - 1];
     final rows = bn; // = an ~/ d
     final out = Float32List(an);
@@ -430,6 +431,7 @@ Tensor opDiv(Tensor a, Tensor b) {
   return _arithFloatFast(a, b, _Arith.div) ??
       _elementwiseBinary(a, b, (x, y) => x / y);
 }
+
 Tensor opPow(Tensor a, Tensor b) {
   // Scalar exponent (LayerNorm's `(x-mean)^2`, sqrt-as-pow etc.) — direct
   // loop, and plain multiply for the ubiquitous square.
@@ -485,6 +487,7 @@ Tensor opRelu(Tensor a) {
   }
   return Tensor.float(out, a.shape);
 }
+
 Tensor opLeakyRelu(Tensor a, double alpha) =>
     _elementwiseUnary(a, (x) => x < 0 ? alpha * x : x);
 Tensor opElu(Tensor a, double alpha) =>
@@ -507,9 +510,8 @@ Tensor opCeil(Tensor a) =>
     a.isFloat ? _elementwiseUnary(a, (x) => x.ceilToDouble()) : a;
 
 /// `Round` — half to even, per the ONNX spec.
-Tensor opRound(Tensor a) => a.isFloat
-    ? _elementwiseUnary(a, (x) => _roundEven(x).toDouble())
-    : a;
+Tensor opRound(Tensor a) =>
+    a.isFloat ? _elementwiseUnary(a, (x) => _roundEven(x).toDouble()) : a;
 
 /// `Gelu`: exact (erf) form, or the tanh approximation when
 /// `approximate="tanh"`.
@@ -851,7 +853,8 @@ Tensor opExpand(Tensor x, Tensor shapeT) {
   } else {
     final out = Int64List(n);
     for (int idx = 0; idx < n; idx++) {
-      out[idx] = x.intData[_flattenBroadcast(_unflatten(idx, outShape), x.shape)];
+      out[idx] =
+          x.intData[_flattenBroadcast(_unflatten(idx, outShape), x.shape)];
     }
     return Tensor.int64(out, outShape);
   }
@@ -1029,11 +1032,39 @@ Tensor opReduceSumSquare(Tensor x, List<int>? axes, bool keepdims) {
   return opReduceSum(squared, axes, keepdims);
 }
 
+/// Process-global injection for the stochastic ops ([opRandomNormalFill] /
+/// [opRandomUniform]). When [provider] is set, each such op calls it with its op
+/// name + output shape; a non-null `Float32List` **of the matching flat length**
+/// is used verbatim instead of the default fill, so a determinism harness can
+/// feed the exact buffer a reference used — e.g. RVC's Site-B SineGen additive
+/// noise. Routing is by length: give the provider the one buffer sized to the
+/// target node and other Random nodes (a different length) fall through to their
+/// default. Null return / length-mismatch → the default (seeded uniform,
+/// mean-fill normal). Set it around ONE run and clear it after (see rvc.dart).
+class OnnxRandomInject {
+  OnnxRandomInject._();
+
+  static Float32List? Function(String op, List<int> shape)? provider;
+
+  /// The injected buffer for [op] at [shape], or null to use the default fill.
+  static Float32List? draw(String op, List<int> shape) {
+    final p = provider;
+    if (p == null) return null;
+    final buf = p(op, shape);
+    if (buf == null) return null;
+    final n = shape.fold<int>(1, (a, b) => a * b);
+    return buf.length == n ? buf : null;
+  }
+}
+
 /// `RandomUniform` — a [shape]-sized tensor of uniform `[low, high)` samples.
 /// Seeded (deterministic) so a run is reproducible (pooled == sync); the NSF
 /// source generator in RVC's decoder draws a little phase noise from it. Won't
 /// bit-match onnxruntime's RNG, but the sine synthesis dominates the output.
+/// An [OnnxRandomInject] provider overrides the draw for a determinism harness.
 Tensor opRandomUniform(List<int> shape, double low, double high, int? seed) {
+  final inj = OnnxRandomInject.draw('RandomUniform', shape);
+  if (inj != null) return Tensor.float(inj, shape);
   final n = shape.fold<int>(1, (a, b) => a * b);
   final rng = math.Random(seed ?? 1234567);
   final out = Float32List(n);
@@ -1118,8 +1149,7 @@ Tensor opGlu(Tensor x, int axis) {
 Tensor opSTFT(Tensor signal, int frameStep, Tensor? window, int? frameLength,
     {bool onesided = true}) {
   // Signal is [batch, len] or [batch, len, 1].
-  assert(
-      signal.rank == 2 || (signal.rank == 3 && signal.shape[2] == 1),
+  assert(signal.rank == 2 || (signal.rank == 3 && signal.shape[2] == 1),
       'STFT supports real signals only');
   final batch = signal.shape[0], len = signal.shape[1];
   final n = frameLength ?? window!.length;
@@ -1167,11 +1197,10 @@ Tensor opSTFT(Tensor signal, int frameStep, Tensor? window, int? frameLength,
 Tensor opReduceMinMax(Tensor x, List<int>? axes, bool keepdims,
     {required bool isMax}) {
   final rank = x.shape.length;
-  final ax = (axes == null || axes.isEmpty
-          ? List<int>.generate(rank, (k) => k)
-          : axes)
-      .map((a) => a < 0 ? a + rank : a)
-      .toSet();
+  final ax =
+      (axes == null || axes.isEmpty ? List<int>.generate(rank, (k) => k) : axes)
+          .map((a) => a < 0 ? a + rank : a)
+          .toSet();
   final outShapeFull = [
     for (int k = 0; k < rank; k++) ax.contains(k) ? 1 : x.shape[k]
   ];
@@ -1568,9 +1597,8 @@ List<Tensor> opGroupQueryAttention(Tensor q, Tensor k, Tensor v,
       }
       scores.fillRange(0, seq * totalLen, 0);
       gemm.matmulKernel(qh, 0, kt, 0, scores, 0, seq, headSize, totalLen);
-      final biasBase = bias == null
-          ? 0
-          : (b * biasHeads + (h % biasHeads)) * seq * totalLen;
+      final biasBase =
+          bias == null ? 0 : (b * biasHeads + (h % biasHeads)) * seq * totalLen;
       for (int i = 0; i < seq; i++) {
         final row = i * totalLen;
         // token i (absolute position pastLen+i) attends causally to keys
@@ -1600,8 +1628,8 @@ List<Tensor> opGroupQueryAttention(Tensor q, Tensor k, Tensor v,
       // ctx = scores · present_V  ([seq,totalLen] · [totalLen,headSize]); the
       // per-head V slice is contiguous at baseP.
       ctx.fillRange(0, seq * headSize, 0);
-      gemm.matmulKernel(scores, 0, presentV, baseP, ctx, 0, seq, totalLen,
-          headSize);
+      gemm.matmulKernel(
+          scores, 0, presentV, baseP, ctx, 0, seq, totalLen, headSize);
       for (int i = 0; i < seq; i++) {
         final dst = (b * seq + i) * numHeads * headSize + h * headSize;
         for (int d = 0; d < headSize; d++) {
@@ -1712,13 +1740,11 @@ Tensor opFusedSDPA(Tensor a, Tensor b, Tensor v, Tensor mask, double scale) {
   // Per-row mask offset via broadcast; within a row the mask stride is 1
   // (mask last dim == t) or 0 (mask last dim == 1).
   final rowShape = s.shape.sublist(0, s.rank - 1);
-  final maskLastStride =
-      mask.shape.isNotEmpty && mask.shape.last == t ? 1 : 0;
+  final maskLastStride = mask.shape.isNotEmpty && mask.shape.last == t ? 1 : 0;
   final rowCoords = List<int>.filled(rowShape.length, 0);
   // Mask shape aligned against the full score shape, minus its last axis.
-  final maskRowShape = mask.rank == 0
-      ? const <int>[]
-      : mask.shape.sublist(0, mask.rank - 1);
+  final maskRowShape =
+      mask.rank == 0 ? const <int>[] : mask.shape.sublist(0, mask.rank - 1);
 
   for (int r = 0; r < rows; r++) {
     final base = r * t;
@@ -2023,7 +2049,8 @@ Tensor opIsNaN(Tensor a) {
   return Tensor.int64(out, a.shape);
 }
 
-Tensor opIsInf(Tensor a, {bool detectPositive = true, bool detectNegative = true}) {
+Tensor opIsInf(Tensor a,
+    {bool detectPositive = true, bool detectNegative = true}) {
   final n = a.length;
   final out = Int64List(n);
   if (a.isFloat) {
@@ -2091,8 +2118,8 @@ Tensor opSize(Tensor x) => Tensor.scalarInt(x.length);
 /// `[maxPos, rotaryDim/2]`, indexed by [positionIds] `[batch, seq]`. Only the
 /// first `rotaryDim` of each head is rotated (the tail passes through);
 /// `interleaved` selects the GPT-J pairing, else the GPT-NeoX rotate-half.
-Tensor opRotaryEmbedding(Tensor x, Tensor positionIds, Tensor cosCache,
-    Tensor sinCache,
+Tensor opRotaryEmbedding(
+    Tensor x, Tensor positionIds, Tensor cosCache, Tensor sinCache,
     {bool interleaved = false, int numHeads = 0, int rotaryEmbeddingDim = 0}) {
   final xf = x.f ?? x.asFloatList();
   final cos = cosCache.asFloatList(), sin = sinCache.asFloatList();
@@ -2159,8 +2186,12 @@ Tensor opRotaryEmbedding(Tensor x, Tensor positionIds, Tensor cosCache,
 /// fill). That is exact for the only parity-testable case — models that scale
 /// the noise to zero (e.g. VITS/Piper with `noise_scale = 0`) — and finite
 /// otherwise. Genuinely stochastic sampling is not reproduced.
-Tensor opRandomNormalFill(List<int> shape, double mean) =>
-    Tensor.filledFloat(shape, mean);
+Tensor opRandomNormalFill(List<int> shape, double mean) {
+  final inj = OnnxRandomInject.draw('RandomNormal', shape);
+  return inj != null
+      ? Tensor.float(inj, shape)
+      : Tensor.filledFloat(shape, mean);
+}
 
 /// `ArgMax` / `ArgMin` along [axis]; ties resolve to the first (or, with
 /// [selectLastIndex], the last) occurrence.
@@ -2263,7 +2294,10 @@ List<Tensor> opTopK(Tensor x, int k, {int axis = -1, bool largest = true}) {
   }
   final vT = Tensor.float(values, outShape);
   return [
-    x.isFloat ? vT : Tensor.int64(Int64List.fromList([for (final v in values) v.toInt()]), outShape),
+    x.isFloat
+        ? vT
+        : Tensor.int64(
+            Int64List.fromList([for (final v in values) v.toInt()]), outShape),
     Tensor.int64(indices, outShape),
   ];
 }
@@ -2410,7 +2444,8 @@ Tensor opScatterND(Tensor data, Tensor indices, Tensor updates) {
       if (v < 0) v += data.shape[d];
       off += v * strides[d];
     }
-    out.setRange(off, off + blockLen, Int64List.sublistView(ui, t * blockLen, (t + 1) * blockLen));
+    out.setRange(off, off + blockLen,
+        Int64List.sublistView(ui, t * blockLen, (t + 1) * blockLen));
   }
   return Tensor.int64(out, data.shape);
 }
@@ -2496,9 +2531,7 @@ Tensor opQuantizeLinear(Tensor x, Tensor scale, Tensor? zeroPoint,
       outU8![k] = v;
     }
   }
-  return signed
-      ? Tensor.int8(outI8!, x.shape)
-      : Tensor.uint8(outU8!, x.shape);
+  return signed ? Tensor.int8(outI8!, x.shape) : Tensor.uint8(outU8!, x.shape);
 }
 
 /// `DequantizeLinear`: `y = (x - zeroPoint) * scale`, per-tensor or per-axis.
@@ -2552,7 +2585,9 @@ List<Tensor> opDynamicQuantizeLinear(Tensor x) {
 /// `Pad` — constant / reflect / edge modes over any rank. [pads] is
 /// `[begin_0..begin_r, end_0..end_r]`; with [axes] (opset 18+) it lists only
 /// the entries for those axes, in the same begin-then-end layout.
-Tensor opPad(Tensor x, List<int> pads, {
+Tensor opPad(
+  Tensor x,
+  List<int> pads, {
   String mode = 'constant',
   double constantValue = 0,
   List<int>? axes,
