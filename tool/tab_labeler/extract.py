@@ -22,6 +22,14 @@ import numpy as np
 
 ANNO = sys.argv[1] if len(sys.argv) > 1 else "anno"
 OUT = sys.argv[2] if len(sys.argv) > 2 else "labeler_data.npz"
+# Max |semitone| transposition augmentation on the TRAIN split (0 = off). A whole
+# passage shifted by k keeps the SAME strings with frets+k — a valid, idiomatic
+# fingering — so it teaches position-relativity and fills the fretboard the 6
+# GuitarSet players don't cover. Val stays un-augmented (honest held-out player).
+AUG = int(os.environ.get("AUG", "0"))
+# Which GuitarSet guitarist (00..05) is the held-out val split. Vary it for
+# leave-one-guitarist-out CV — player 05 alone can under/over-state generalization.
+HOLDOUT = os.environ.get("HOLDOUT", "05")
 
 # Decoder-order open-string MIDIs (index 0 = high e … 5 = low E).
 OPEN = [64, 59, 55, 50, 45, 40]
@@ -65,11 +73,44 @@ def columns_for(jam):
 
 
 def encode_column(pitches):
-    v = np.zeros(PITCH_BINS, np.float32)
+    # uint8 multi-hot (binary) — 4× smaller on disk / in RAM than float32; the
+    # trainer casts per batch. Matters on a 16 GB box with augmentation on.
+    v = np.zeros(PITCH_BINS, np.uint8)
     for m in pitches:
         if PITCH_LO <= m <= PITCH_HI:
-            v[m - PITCH_LO] = 1.0
+            v[m - PITCH_LO] = 1
     return v
+
+
+def shifted(cols, k):
+    """Transpose every column by k semitones (same strings, frets+k). Returns
+    None if any note would leave [0, MAXFRET] — a uniform shift keeps the
+    fingering valid and idiomatic."""
+    out = []
+    for frets, pitches in cols:
+        nf = {}
+        for ds, fret in frets.items():
+            f2 = fret + k
+            if not (0 <= f2 <= MAXFRET):
+                return None
+            nf[ds] = f2
+        out.append((nf, {m + k for m in pitches}))
+    return out
+
+
+def emit(cols, Xs, Ys):
+    enc = [encode_column(p) for (_, p) in cols]
+    for c in range(len(cols)):
+        win = np.zeros((PITCH_BINS, WINDOW), np.uint8)
+        for w in range(WINDOW):
+            k = c - HALF + w
+            if 0 <= k < len(cols):
+                win[:, w] = enc[k]
+        y = np.zeros(6, np.int64)  # 0 = silent
+        for ds, fret in cols[c][0].items():
+            y[ds] = fret + 1  # class k = fret k-1
+        Xs.append(win[:, :, None])
+        Ys.append(y)
 
 
 def main():
@@ -77,32 +118,22 @@ def main():
     Xtr, Ytr, Xva, Yva = [], [], [], []
     ncols = 0
     for f in files:
-        guitarist = os.path.basename(f)[:2]  # 00..05
-        val = guitarist == "05"
+        val = os.path.basename(f)[:2] == HOLDOUT
         cols = columns_for(jams.load(f))
         ncols += len(cols)
-        enc = [encode_column(p) for (_, p) in cols]
-        for c in range(len(cols)):
-            # WINDOW of column encodings centred on c, zero-padded at edges.
-            win = np.zeros((PITCH_BINS, WINDOW), np.float32)
-            for w in range(WINDOW):
-                k = c - HALF + w
-                if 0 <= k < len(cols):
-                    win[:, w] = enc[k]
-            frets = cols[c][0]
-            y = np.zeros(6, np.int64)  # 0 = silent
-            for ds, fret in frets.items():
-                y[ds] = fret + 1  # class k = fret k-1
-            x = win[:, :, None]  # [PITCH_BINS, WINDOW, 1]
-            if val:
-                Xva.append(x)
-                Yva.append(y)
-            else:
-                Xtr.append(x)
-                Ytr.append(y)
-    Xtr = np.asarray(Xtr, np.float32)
+        if val:
+            emit(cols, Xva, Yva)
+        else:
+            emit(cols, Xtr, Ytr)
+            for k in range(-AUG, AUG + 1):
+                if k == 0:
+                    continue
+                sh = shifted(cols, k)
+                if sh is not None:
+                    emit(sh, Xtr, Ytr)
+    Xtr = np.asarray(Xtr, np.uint8)
     Ytr = np.asarray(Ytr, np.int64)
-    Xva = np.asarray(Xva, np.float32)
+    Xva = np.asarray(Xva, np.uint8)
     Yva = np.asarray(Yva, np.int64)
     np.savez_compressed(OUT, Xtr=Xtr, Ytr=Ytr, Xva=Xva, Yva=Yva)
     print(f"{len(files)} files, {ncols} columns")
