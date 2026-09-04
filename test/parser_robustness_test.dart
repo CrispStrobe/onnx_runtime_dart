@@ -72,7 +72,8 @@ void main() {
         r'C:\Windows\x',
         '',
       ]) {
-        expect(() => checkExternalRef(loc, 0, 0, 1 << 20), throwsFormatException,
+        expect(
+            () => checkExternalRef(loc, 0, 0, 1 << 20), throwsFormatException,
             reason: 'location "$loc" must be rejected');
       }
     });

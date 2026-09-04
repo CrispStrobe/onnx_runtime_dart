@@ -21,8 +21,7 @@ OnnxModel _model() {
       ..type = (TypeProto()
         ..tensorType = (TypeProto_Tensor()
           ..elemType = TensorProto_DataType.FLOAT.value
-          ..shape = (TensorShapeProto()
-            ..dim.addAll([dynamic_(), fixed(3)])))))
+          ..shape = (TensorShapeProto()..dim.addAll([dynamic_(), fixed(3)])))))
     ..output.add(ValueInfoProto()..name = 'Y')
     ..node.add(NodeProto()
       ..opType = 'Neg'
@@ -35,24 +34,36 @@ void main() {
   test('dynamic dims accept any size; fixed dims are enforced', () {
     final model = _model();
     // batch is dynamic: [5, 3] fine.
-    final ok = model.run(
-        {'X': Tensor.float(Float32List(15), [5, 3])}, ['Y'])['Y']!;
+    final ok = model.run({
+      'X': Tensor.float(Float32List(15), [5, 3])
+    }, [
+      'Y'
+    ])['Y']!;
     expect(ok.shape, [5, 3]);
     // fixed dim mismatch: [5, 4] must throw, naming input and sizes.
     expect(
-        () => model.run({'X': Tensor.float(Float32List(20), [5, 4])}, ['Y']),
-        throwsA(isA<ArgumentError>().having(
-            (e) => e.message, 'message', contains('fixed size 3'))));
+        () => model.run({
+              'X': Tensor.float(Float32List(20), [5, 4])
+            }, [
+              'Y'
+            ]),
+        throwsA(isA<ArgumentError>()
+            .having((e) => e.message, 'message', contains('fixed size 3'))));
     // rank mismatch.
     expect(
-        () => model.run({'X': Tensor.float(Float32List(3), [3])}, ['Y']),
+        () => model.run({
+              'X': Tensor.float(Float32List(3), [3])
+            }, [
+              'Y'
+            ]),
         throwsA(isA<ArgumentError>()));
   });
 
   test('missing required input throws by name', () {
-    expect(() => _model().run({}, ['Y']),
-        throwsA(isA<ArgumentError>().having(
-            (e) => e.message, 'message', contains('"X"'))));
+    expect(
+        () => _model().run({}, ['Y']),
+        throwsA(isA<ArgumentError>()
+            .having((e) => e.message, 'message', contains('"X"'))));
   });
 
   test('a malformed protobuf rejects with FormatException, not RangeError', () {

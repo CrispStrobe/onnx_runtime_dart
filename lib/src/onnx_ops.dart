@@ -419,6 +419,7 @@ Tensor opAddRelu(Tensor a, Tensor b) {
   }
   return opRelu(sum);
 }
+
 Tensor opSub(Tensor a, Tensor b) =>
     _arithFloatFast(a, b, _Arith.sub) ??
     _elementwiseBinary(a, b, (x, y) => x - y);
@@ -979,8 +980,10 @@ Tensor opReduceMean(Tensor x, List<int>? axes, bool keepdims) {
       out[r] = sum / d;
     }
     final shape = keepdims
-        ? [...x.shape.sublist(0, firstReducedAxis),
-           ...List.filled(ax.length, 1)]
+        ? [
+            ...x.shape.sublist(0, firstReducedAxis),
+            ...List.filled(ax.length, 1)
+          ]
         : x.shape.sublist(0, firstReducedAxis);
     return Tensor.float(out, shape);
   }

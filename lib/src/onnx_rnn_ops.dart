@@ -89,8 +89,8 @@ class _RnnDir {
 
 int _dirCount(String direction) => direction == 'bidirectional' ? 2 : 1;
 
-void _checkDefaultActivations(List<String>? acts, String direction, String op,
-    List<String> defaults) {
+void _checkDefaultActivations(
+    List<String>? acts, String direction, String op, List<String> defaults) {
   if (acts == null) return;
   final want = [
     ...defaults,
@@ -143,8 +143,8 @@ List<Tensor> opLSTM(
     final bias = _dirSlice(b, dir, 8 * h);
     final d = _RnnDir(
       x: xf,
-      w: Float32List.sublistView(wf, dir * 4 * h * input,
-          (dir + 1) * 4 * h * input),
+      w: Float32List.sublistView(
+          wf, dir * 4 * h * input, (dir + 1) * 4 * h * input),
       r: Float32List.sublistView(rf, dir * 4 * h * h, (dir + 1) * 4 * h * h),
       wb: bias == null ? null : Float32List.sublistView(bias, 0, 4 * h),
       rb: bias == null ? null : Float32List.sublistView(bias, 4 * h, 8 * h),
@@ -161,14 +161,16 @@ List<Tensor> opLSTM(
     final hState = Float32List(batch * h);
     final cState = Float32List(batch * h);
     if (initialH != null) {
-      hState.setAll(0,
-          Float32List.sublistView(initialH.asFloatList(), dir * batch * h,
-              (dir + 1) * batch * h));
+      hState.setAll(
+          0,
+          Float32List.sublistView(
+              initialH.asFloatList(), dir * batch * h, (dir + 1) * batch * h));
     }
     if (initialC != null) {
-      cState.setAll(0,
-          Float32List.sublistView(initialC.asFloatList(), dir * batch * h,
-              (dir + 1) * batch * h));
+      cState.setAll(
+          0,
+          Float32List.sublistView(
+              initialC.asFloatList(), dir * batch * h, (dir + 1) * batch * h));
     }
 
     final pre = Float32List(4 * h);
@@ -181,14 +183,12 @@ List<Tensor> opLSTM(
         // Gate blocks in spec order: i, o, f, c.
         for (int j = 0; j < h; j++) {
           final cPrev = cState[hOff + j];
-          final it =
-              _sigmoid(pre[j] + (p == null ? 0 : p[j] * cPrev));
+          final it = _sigmoid(pre[j] + (p == null ? 0 : p[j] * cPrev));
           final ft =
               _sigmoid(pre[2 * h + j] + (p == null ? 0 : p[2 * h + j] * cPrev));
           final ct = _tanh(pre[3 * h + j]);
           final c = ft * cPrev + it * ct;
-          final ot =
-              _sigmoid(pre[h + j] + (p == null ? 0 : p[h + j] * c));
+          final ot = _sigmoid(pre[h + j] + (p == null ? 0 : p[h + j] * c));
           final hv = ot * _tanh(c);
           cState[hOff + j] = c;
           hState[hOff + j] = hv;
@@ -242,8 +242,8 @@ List<Tensor> opGRU(
         Float32List.sublistView(rf, dir * 3 * h * h, (dir + 1) * 3 * h * h);
     final d = _RnnDir(
       x: xf,
-      w: Float32List.sublistView(wf, dir * 3 * h * input,
-          (dir + 1) * 3 * h * input),
+      w: Float32List.sublistView(
+          wf, dir * 3 * h * input, (dir + 1) * 3 * h * input),
       r: rDir,
       wb: wbAll,
       // The h-gate's R contribution differs between the two
@@ -261,9 +261,10 @@ List<Tensor> opGRU(
 
     final hState = Float32List(batch * h);
     if (initialH != null) {
-      hState.setAll(0,
-          Float32List.sublistView(initialH.asFloatList(), dir * batch * h,
-              (dir + 1) * batch * h));
+      hState.setAll(
+          0,
+          Float32List.sublistView(
+              initialH.asFloatList(), dir * batch * h, (dir + 1) * batch * h));
     }
 
     final xwRowBuf = Float32List(3 * h);
@@ -316,8 +317,7 @@ List<Tensor> opGRU(
             }
             hPre = xwRowBuf[2 * h + j] + sum;
           }
-          hNew[j] =
-              (1 - zBuf[j]) * _tanh(hPre) + zBuf[j] * hState[hOff + j];
+          hNew[j] = (1 - zBuf[j]) * _tanh(hPre) + zBuf[j] * hState[hOff + j];
         }
         for (int j = 0; j < h; j++) {
           hState[hOff + j] = hNew[j];
@@ -378,9 +378,10 @@ List<Tensor> opRNN(
 
     final hState = Float32List(batch * h);
     if (initialH != null) {
-      hState.setAll(0,
-          Float32List.sublistView(initialH.asFloatList(), dir * batch * h,
-              (dir + 1) * batch * h));
+      hState.setAll(
+          0,
+          Float32List.sublistView(
+              initialH.asFloatList(), dir * batch * h, (dir + 1) * batch * h));
     }
 
     final pre = Float32List(h);

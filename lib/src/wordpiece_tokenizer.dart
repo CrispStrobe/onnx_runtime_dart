@@ -27,9 +27,18 @@ class WordPieceTokenizer {
   final int clsId, sepId;
   final List<TemplateItem>? singleTpl, pairTpl; // post-processor templates
 
-  WordPieceTokenizer._(this.vocab, this.idToToken, this.prefix, this.unk,
-      this.maxChars, this.lowercase, this.stripAccents, this.clsId, this.sepId,
-      this.singleTpl, this.pairTpl);
+  WordPieceTokenizer._(
+      this.vocab,
+      this.idToToken,
+      this.prefix,
+      this.unk,
+      this.maxChars,
+      this.lowercase,
+      this.stripAccents,
+      this.clsId,
+      this.sepId,
+      this.singleTpl,
+      this.pairTpl);
 
   factory WordPieceTokenizer.fromFile(String path) =>
       WordPieceTokenizer.fromJson(File(path).readAsStringSync());
@@ -98,7 +107,9 @@ class WordPieceTokenizer {
       cp == 0x3000;
 
   static bool _isControl(int cp) {
-    if (cp == 0x09 || cp == 0x0A || cp == 0x0D) return false; // treated as space
+    if (cp == 0x09 || cp == 0x0A || cp == 0x0D) {
+      return false; // treated as space
+    }
     return cp == 0 ||
         cp == 0xFFFD ||
         (cp < 0x20) ||
@@ -160,7 +171,10 @@ class WordPieceTokenizer {
         continue;
       }
       if (_isCjk(cp)) {
-        buf..write(' ')..writeCharCode(cp)..write(' ');
+        buf
+          ..write(' ')
+          ..writeCharCode(cp)
+          ..write(' ');
         continue;
       }
       buf.writeCharCode(cp);

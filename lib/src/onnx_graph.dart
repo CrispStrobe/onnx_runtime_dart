@@ -228,9 +228,8 @@ class OnnxGraphExecutor {
       // (1 + erf)
       final add = soleConsumer(erf.output[0]);
       if (add == null || add.opType != 'Add') continue;
-      final one = scalarInit(add.input[0] == erf.output[0]
-          ? add.input[1]
-          : add.input[0]);
+      final one = scalarInit(
+          add.input[0] == erf.output[0] ? add.input[1] : add.input[0]);
       if (one == null || (one - 1).abs() > 1e-6) continue;
       // * x, then * 0.5 (either order)
       final mul1 = soleConsumer(add.output[0]);
@@ -276,8 +275,7 @@ class OnnxGraphExecutor {
       if (sig == null || sig.opType != 'Sigmoid' || uses[b] != 1) continue;
       final mul = soleConsumer(sig.output[0]);
       if (mul == null || mul.opType != 'Mul') continue;
-      final other =
-          mul.input[0] == sig.output[0] ? mul.input[1] : mul.input[0];
+      final other = mul.input[0] == sig.output[0] ? mul.input[1] : mul.input[0];
       if (other != a || uses[a] != 1) continue;
 
       removed.addAll([split, sig]);
@@ -314,9 +312,8 @@ class OnnxGraphExecutor {
       }
       final addEps = soleConsumer(rm.output[0]);
       if (addEps == null || addEps.opType != 'Add') continue;
-      final eps = scalarInit(addEps.input[0] == rm.output[0]
-          ? addEps.input[1]
-          : addEps.input[0]);
+      final eps = scalarInit(
+          addEps.input[0] == rm.output[0] ? addEps.input[1] : addEps.input[0]);
       if (eps == null) continue;
       final sqrt = soleConsumer(addEps.output[0]);
       if (sqrt == null || sqrt.opType != 'Sqrt') continue;
@@ -443,7 +440,9 @@ class OnnxGraphExecutor {
         name = node.input[0];
         node = producers[name];
       }
-      if (node == null || node.opType != 'MatMul' || inserts.containsKey(node)) {
+      if (node == null ||
+          node.opType != 'MatMul' ||
+          inserts.containsKey(node)) {
         continue;
       }
       // Only the vocab-sized projection is worth slicing (skip small heads).
@@ -658,7 +657,9 @@ class OnnxGraphExecutor {
         for (final name in node.input) name.isEmpty ? null : values[name]
       ];
       List<Tensor> outs;
-      sw?..reset()..start();
+      sw
+        ?..reset()
+        ..start();
       try {
         final part = pool != null && node.opType == 'MatMul'
             ? pool.weights[node.input[1]]
@@ -692,8 +693,7 @@ class OnnxGraphExecutor {
             ins[0]!.shape[0] >= _minPoolRows) {
           final aG = ins[0]!;
           final m = aG.shape[0];
-          final raw =
-              await pool!.matmul('gemm:${node.input[1]}', aG.f!, m);
+          final raw = await pool!.matmul('gemm:${node.input[1]}', aG.f!, m);
           var y = Tensor.float(raw, [m, gemmPart.n]);
           final alpha = attrs.getFloat('alpha') ?? 1.0;
           if (alpha != 1.0) {
@@ -743,8 +743,7 @@ class OnnxGraphExecutor {
               oh: outSp[0],
               ow: outSp[1],
             );
-            final y =
-                Tensor.float(out, [x4.shape[0], w.shape[0], ...outSp]);
+            final y = Tensor.float(out, [x4.shape[0], w.shape[0], ...outSp]);
             outs = [
               oneD ? y.reshape([y.shape[0], y.shape[1], y.shape[2]]) : y
             ];
@@ -791,15 +790,17 @@ class OnnxGraphExecutor {
         for (final name in node.input) name.isEmpty ? null : values[name]
       ];
       List<Tensor> outs;
-      sw?..reset()..start();
+      sw
+        ?..reset()
+        ..start();
       try {
         // Control-flow ops run subgraphs against the current scope, so they
         // are handled here rather than in the pure-function dispatch.
         switch (node.opType) {
           case 'If':
             final branch = ins[0]!.getI(0) != 0 ? 'then_branch' : 'else_branch';
-            outs = _execSubgraph(attrs.getGraph(branch)!, values, const [],
-                profile);
+            outs = _execSubgraph(
+                attrs.getGraph(branch)!, values, const [], profile);
           case 'Loop':
             outs = _runLoop(node, ins, attrs, values, profile);
           case 'Scan':
@@ -884,20 +885,16 @@ class OnnxGraphExecutor {
                 Int64List.sublistView(t.i!, i * rowLen, (i + 1) * rowLen),
                 shape);
       }
-      return ops.opSqueeze(
-          ops.opSlice(t, [i], [i + 1], [axis], null), [axis]);
+      return ops.opSqueeze(ops.opSlice(t, [i], [i + 1], [axis], null), [axis]);
     }
 
     for (int i = 0; i < iters; i++) {
       final sliced = [
         for (int j = 0; j < nScan; j++)
-          sliceAt(
-              scanIns[j],
-              inAxes[j],
+          sliceAt(scanIns[j], inAxes[j],
               inDirs != null && inDirs[j] == 1 ? iters - 1 - i : i)
       ];
-      final outs =
-          _execSubgraph(body, values, [...states, ...sliced], profile);
+      final outs = _execSubgraph(body, values, [...states, ...sliced], profile);
       states = outs.sublist(0, nState);
       for (int k = 0; k < nScanOut; k++) {
         scans[k].add(outs[nState + k]);
@@ -913,8 +910,9 @@ class OnnxGraphExecutor {
       if (axis == 0) return _stack(steps);
       final rank = steps.first.rank + 1;
       final ax = axis < 0 ? axis + rank : axis;
-      return ops.opConcat(
-          [for (final s in steps) ops.opUnsqueeze(s, [ax])], ax);
+      return ops.opConcat([
+        for (final s in steps) ops.opUnsqueeze(s, [ax])
+      ], ax);
     }
 
     return [
@@ -966,8 +964,8 @@ class OnnxGraphExecutor {
     if (steps.first.isFloat) {
       final out = Float32List(steps.length * steps.first.length);
       for (int k = 0; k < steps.length; k++) {
-        out.setRange(k * steps.first.length, (k + 1) * steps.first.length,
-            steps[k].f!);
+        out.setRange(
+            k * steps.first.length, (k + 1) * steps.first.length, steps[k].f!);
       }
       return Tensor.float(out, shape);
     }
@@ -1041,8 +1039,8 @@ class OnnxGraphExecutor {
             localWindow: attrs.getInt('local_window_size') ?? -1);
       case 'MultiHeadAttention':
         return [
-          ops.opMultiHeadAttention(need(0), need(1), need(2),
-              ins.length > 5 ? ins[5] : null,
+          ops.opMultiHeadAttention(
+              need(0), need(1), need(2), ins.length > 5 ? ins[5] : null,
               numHeads: attrs.getInt('num_heads')!,
               scale: attrs.getFloat('scale'))
         ];
@@ -1063,8 +1061,8 @@ class OnnxGraphExecutor {
         // Fused residual add + RMSNorm: inputs (x, skip, scale[, bias]);
         // outputs (rmsnorm(x+skip)[, mean, inv_std, x+skip]).
         final sum = ops.opAdd(need(0), need(1));
-        final normed = ops.opRMSNorm(sum, need(2), -1,
-            attrs.getFloat('epsilon') ?? 1e-5);
+        final normed =
+            ops.opRMSNorm(sum, need(2), -1, attrs.getFloat('epsilon') ?? 1e-5);
         final withBias = ins.length > 3 && ins[3] != null
             ? ops.opAdd(normed, ins[3]!)
             : normed;
@@ -1076,8 +1074,8 @@ class OnnxGraphExecutor {
         ];
       case '_FusedSDPA':
         return [
-          ops.opFusedSDPA(need(0), need(1), need(2), need(3),
-              attrs.getFloat('scale')!)
+          ops.opFusedSDPA(
+              need(0), need(1), need(2), need(3), attrs.getFloat('scale')!)
         ];
       case 'Add':
         return [ops.opAdd(need(0), need(1))];
@@ -1221,8 +1219,7 @@ class OnnxGraphExecutor {
         ];
       case 'Einsum':
         return [
-          ops.opEinsum(attrs.getString('equation')!,
-              [for (final t in ins) t!])
+          ops.opEinsum(attrs.getString('equation')!, [for (final t in ins) t!])
         ];
       // --- extended op set ---
       case 'Constant':
@@ -1475,7 +1472,8 @@ class OnnxGraphExecutor {
         ];
       case 'Resize':
         // Opset 10: (X, scales). Opset 11+: (X, roi, scales, sizes).
-        final scalesT = ins.length == 2 ? ins[1] : (ins.length > 2 ? ins[2] : null);
+        final scalesT =
+            ins.length == 2 ? ins[1] : (ins.length > 2 ? ins[2] : null);
         final sizesT = ins.length > 3 ? ins[3] : null;
         return [
           nn.opResize(
@@ -1512,7 +1510,8 @@ class OnnxGraphExecutor {
         return [
           need(0),
           if (node.output.length > 1 && node.output[1].isNotEmpty)
-            Tensor.int64(Int64List(need(0).length)..fillRange(0, need(0).length, 1),
+            Tensor.int64(
+                Int64List(need(0).length)..fillRange(0, need(0).length, 1),
                 need(0).shape),
         ];
       case 'LeakyRelu':
@@ -1592,27 +1591,26 @@ class OnnxGraphExecutor {
       case 'QuantizeLinear':
         // Saturation bounds come from the zero-point tensor's declared
         // dtype; absent zero point means uint8 per the spec.
-        final int8 = node.input.length > 2 &&
-            _initializerElemType[node.input[2]] == 3;
+        final int8 =
+            node.input.length > 2 && _initializerElemType[node.input[2]] == 3;
         return [
-          ops.opQuantizeLinear(need(0), need(1),
-              ins.length > 2 ? ins[2] : null,
+          ops.opQuantizeLinear(need(0), need(1), ins.length > 2 ? ins[2] : null,
               axis: attrs.getInt('axis') ?? 1,
               lo: int8 ? -128 : 0,
               hi: int8 ? 127 : 255)
         ];
       case 'DequantizeLinear':
         return [
-          ops.opDequantizeLinear(need(0), need(1),
-              ins.length > 2 ? ins[2] : null,
+          ops.opDequantizeLinear(
+              need(0), need(1), ins.length > 2 ? ins[2] : null,
               axis: attrs.getInt('axis') ?? 1)
         ];
       case 'DynamicQuantizeLinear':
         return ops.opDynamicQuantizeLinear(need(0));
       case 'MatMulInteger':
         return [
-          ql.opMatMulInteger(need(0), need(1),
-              ins.length > 2 ? ins[2] : null, ins.length > 3 ? ins[3] : null)
+          ql.opMatMulInteger(need(0), need(1), ins.length > 2 ? ins[2] : null,
+              ins.length > 3 ? ins[3] : null)
         ];
       case 'ConvInteger':
         return [
@@ -1626,8 +1624,8 @@ class OnnxGraphExecutor {
       case 'QLinearMatMul':
         final qmInt8 = _initializerElemType[node.input[7]] == 3;
         return [
-          ql.opQLinearMatMul(need(0), need(1), ins[2], need(3), need(4),
-              ins[5], need(6), ins.length > 7 ? ins[7] : null,
+          ql.opQLinearMatMul(need(0), need(1), ins[2], need(3), need(4), ins[5],
+              need(6), ins.length > 7 ? ins[7] : null,
               lo: qmInt8 ? -128 : 0, hi: qmInt8 ? 127 : 255)
         ];
       case 'MatMulNBits':
@@ -1636,8 +1634,8 @@ class OnnxGraphExecutor {
               'MatMulNBits: g_idx/bias inputs not supported');
         }
         return [
-          ql.opMatMulNBits(need(0), need(1), need(2),
-              ins.length > 3 ? ins[3] : null,
+          ql.opMatMulNBits(
+              need(0), need(1), need(2), ins.length > 3 ? ins[3] : null,
               k: attrs.getInt('K')!,
               n: attrs.getInt('N')!,
               bits: attrs.getInt('bits') ?? 4,
@@ -1646,8 +1644,15 @@ class OnnxGraphExecutor {
       case 'QLinearConv':
         final qcInt8 = _initializerElemType[node.input[7]] == 3;
         return [
-          ql.opQLinearConv(need(0), need(1), ins[2], need(3), need(4),
-              ins[5], need(6), ins.length > 7 ? ins[7] : null,
+          ql.opQLinearConv(
+              need(0),
+              need(1),
+              ins[2],
+              need(3),
+              need(4),
+              ins[5],
+              need(6),
+              ins.length > 7 ? ins[7] : null,
               ins.length > 8 ? ins[8] : null,
               strides: attrs.getInts('strides'),
               pads: attrs.getInts('pads'),
@@ -1740,22 +1745,19 @@ class _AttrMap {
   List<int>? getInts(String name) => _byName.containsKey(name)
       ? _byName[name]!.ints.map((v) => v.toInt()).toList()
       : null;
-  List<double>? getFloats(String name) => _byName.containsKey(name)
-      ? _byName[name]!.floats.toList()
-      : null;
+  List<double>? getFloats(String name) =>
+      _byName.containsKey(name) ? _byName[name]!.floats.toList() : null;
   List<String>? getStrings(String name) => _byName.containsKey(name)
-      ? _byName[name]!
-          .strings
-          .map((s) => String.fromCharCodes(s))
-          .toList()
+      ? _byName[name]!.strings.map((s) => String.fromCharCodes(s)).toList()
       : null;
   GraphProto? getGraph(String name) =>
       _byName.containsKey(name) ? _byName[name]!.g : null;
 
   /// The tensor value of a TENSOR-typed attribute (e.g. `ConstantOfShape`'s
   /// `value`), or null if absent.
-  Tensor? getTensor(String name) =>
-      _byName.containsKey(name) ? tensorFromProto(_byName[name]!.t, ext: _ext) : null;
+  Tensor? getTensor(String name) => _byName.containsKey(name)
+      ? tensorFromProto(_byName[name]!.t, ext: _ext)
+      : null;
 
   /// The value produced by a `Constant` node — either a `value` tensor or one
   /// of the scalar/list attribute forms the op allows.

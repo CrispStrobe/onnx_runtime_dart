@@ -314,10 +314,10 @@ double dotProduct(Float32List a, int aOff, Float32List b, int bOff, int n) {
   var acc = Float32x4.zero();
   int k = 0;
   for (; k + 4 <= n; k += 4) {
-    acc += Float32x4(a[aOff + k], a[aOff + k + 1], a[aOff + k + 2],
-            a[aOff + k + 3]) *
-        Float32x4(b[bOff + k], b[bOff + k + 1], b[bOff + k + 2],
-            b[bOff + k + 3]);
+    acc += Float32x4(
+            a[aOff + k], a[aOff + k + 1], a[aOff + k + 2], a[aOff + k + 3]) *
+        Float32x4(
+            b[bOff + k], b[bOff + k + 1], b[bOff + k + 2], b[bOff + k + 3]);
   }
   double sum = acc.x + acc.y + acc.z + acc.w;
   for (; k < n; k++) {

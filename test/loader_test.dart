@@ -17,7 +17,10 @@ void main() {
       'float32 raw_data': TensorProto(
           name: 'w', dataType: 1, dims: [Int64(100)], rawData: [0, 0, 0, 0]),
       'int64 raw_data': TensorProto(
-          name: 'w', dataType: 7, dims: [Int64(100)], rawData: List.filled(8, 0)),
+          name: 'w',
+          dataType: 7,
+          dims: [Int64(100)],
+          rawData: List.filled(8, 0)),
       'int32 raw_data':
           TensorProto(name: 'w', dataType: 6, dims: [Int64(100)], rawData: []),
       'double raw_data':
@@ -44,9 +47,10 @@ void main() {
     test('negative dimension -> FormatException', () {
       final t = TensorProto(
           name: 'w', dataType: 1, dims: [Int64(-8)], rawData: [0, 0, 0, 0]);
-      expect(() => tensorFromProto(t),
-          throwsA(isA<FormatException>().having((e) => '$e', 'msg',
-              contains('negative dimension'))));
+      expect(
+          () => tensorFromProto(t),
+          throwsA(isA<FormatException>()
+              .having((e) => '$e', 'msg', contains('negative dimension'))));
     });
 
     final inlineMismatch = <String, TensorProto>{

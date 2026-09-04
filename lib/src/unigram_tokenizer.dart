@@ -205,8 +205,9 @@ class UnigramTokenizer {
     return ids.reversed.toList();
   }
 
-  int get _singleSpecials =>
-      singleTpl != null ? countSpecials(singleTpl!) : ((bosId != null ? 1 : 0) + (eosId != null ? 1 : 0));
+  int get _singleSpecials => singleTpl != null
+      ? countSpecials(singleTpl!)
+      : ((bosId != null ? 1 : 0) + (eosId != null ? 1 : 0));
   int get _pairSpecials => pairTpl != null ? countSpecials(pairTpl!) : 4;
 
   /// Encode [text] to token ids, wrapped per the `single` post-processor

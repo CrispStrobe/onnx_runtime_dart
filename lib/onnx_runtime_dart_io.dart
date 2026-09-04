@@ -61,7 +61,8 @@ void checkExternalRef(String location, int offset, int length, int fileLen) {
       length < 0 ||
       length > fileLen ||
       offset > fileLen - length) {
-    throw FormatException('external-data range [$offset, +$length) lies outside '
+    throw FormatException(
+        'external-data range [$offset, +$length) lies outside '
         'the companion file ($fileLen bytes)');
   }
   // GUARD:extdata <<<

@@ -86,8 +86,8 @@ typedef ExternalDataResolver = Uint8List Function(
 /// absent or 0 (some exporters — e.g. certain Optimum fp16 exports — emit
 /// `length: 0` and expect the reader to derive it from the shape, as ORT
 /// does).
-Uint8List _rawBytes(TensorProto t, ExternalDataResolver? ext,
-    int expectedBytes) {
+Uint8List _rawBytes(
+    TensorProto t, ExternalDataResolver? ext, int expectedBytes) {
   if (t.dataLocation == TensorProto_DataLocation.EXTERNAL) {
     if (ext == null) {
       throw StateError('"${t.name}" stores its weights externally — load the '

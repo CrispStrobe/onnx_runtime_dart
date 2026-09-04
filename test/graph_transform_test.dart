@@ -25,9 +25,9 @@ double _erfRef(double x) {
   final t = 1.0 / (1.0 + p * x);
   final y = 1.0 -
       (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t -
-                  0.284496736) *
-              t +
-          0.254829592) *
+                      0.284496736) *
+                  t +
+              0.254829592) *
           t *
           math.exp(-x * x);
   return sign * y;
@@ -65,10 +65,11 @@ void main() {
     final model =
         OnnxModel.fromBytes((ModelProto()..graph = g).writeToBuffer());
     final profile = ExecutionProfile();
-    final y = model.run(
-        {'X': Tensor.float(Float32List.fromList([100, 200]), [2])},
-        ['Y'],
-        profile: profile)['Y']!;
+    final y = model.run({
+      'X': Tensor.float(Float32List.fromList([100, 200]), [2])
+    }, [
+      'Y'
+    ], profile: profile)['Y']!;
     // C3 = -[1,2] + [10,20] = [9,18]; Y = X + C3.
     expect(y.asFloatList(), [109.0, 218.0]);
     expect(profile.callsByOp.keys.toList(), ['Add'],
@@ -104,8 +105,8 @@ void main() {
     expect(model.run({'X': x}, ['Y'])['Y']!.asFloatList(), [-3.0, -5.0]);
     // Overridden W = [2,10] → Y = [-6,-50].
     final w = Tensor.float(Float32List.fromList([2, 10]), [2]);
-    expect(model.run({'X': x, 'W': w}, ['Y'])['Y']!.asFloatList(),
-        [-6.0, -50.0]);
+    expect(
+        model.run({'X': x, 'W': w}, ['Y'])['Y']!.asFloatList(), [-6.0, -50.0]);
   });
 
   group('pattern fusion', () {
@@ -139,20 +140,25 @@ void main() {
       final y = model.run({
         'A': Tensor.float(Float32List.fromList([-3, 2, 5]), [3]),
         'B': Tensor.float(Float32List.fromList([1, -4, 6]), [3]),
-      }, ['Y'], profile: profile)['Y']!;
+      }, [
+        'Y'
+      ], profile: profile)['Y']!;
       expect(y.asFloatList(), [0.0, 0.0, 11.0]);
       expect(profile.callsByOp, {'_FusedAddRelu': 1});
     });
 
     test('Add-Relu fusion preserves an observed sum', () {
-      final model = OnnxModel.fromBytes(
-          (ModelProto()..graph = addReluGraph(leakIntermediate: true))
-              .writeToBuffer());
+      final model = OnnxModel.fromBytes((ModelProto()
+            ..graph = addReluGraph(leakIntermediate: true))
+          .writeToBuffer());
       final profile = ExecutionProfile();
       final out = model.run({
         'A': Tensor.float(Float32List.fromList([-3, 2]), [2]),
         'B': Tensor.float(Float32List.fromList([1, -4]), [2]),
-      }, ['Y', 'sum'], profile: profile);
+      }, [
+        'Y',
+        'sum'
+      ], profile: profile);
       expect(out['sum']!.asFloatList(), [-2.0, -2.0]);
       expect(out['Y']!.asFloatList(), [0.0, 0.0]);
       expect(profile.callsByOp, {'Add': 1, 'Relu': 1});
@@ -205,8 +211,7 @@ void main() {
     test('erf-GELU chain fuses and computes gelu', () {
       final model = OnnxModel.fromBytes(
           (ModelProto()..graph = geluGraph()).writeToBuffer());
-      final x = Tensor.float(
-          Float32List.fromList([-2, -0.5, 0, 0.5, 2]), [5]);
+      final x = Tensor.float(Float32List.fromList([-2, -0.5, 0, 0.5, 2]), [5]);
       final profile = ExecutionProfile();
       final y = model.run({'X': x}, ['Y'], profile: profile)['Y']!;
       expect(profile.callsByOp.keys.toList(), ['_FusedGelu'],
@@ -217,9 +222,9 @@ void main() {
     });
 
     test('fusion aborts when an intermediate is a graph output', () {
-      final model = OnnxModel.fromBytes(
-          (ModelProto()..graph = geluGraph(leakIntermediate: true))
-              .writeToBuffer());
+      final model = OnnxModel.fromBytes((ModelProto()
+            ..graph = geluGraph(leakIntermediate: true))
+          .writeToBuffer());
       final x = Tensor.float(Float32List.fromList([1.0, -1.0]), [2]);
       final profile = ExecutionProfile();
       final out = model.run({'X': x}, ['Y', 'e'], profile: profile);

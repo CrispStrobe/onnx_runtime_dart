@@ -48,8 +48,8 @@ void main() {
   for (final dir in cases) {
     final name = dir.uri.pathSegments.lastWhere((s) => s.isNotEmpty);
     test('ORT parity: $name', () {
-      final model = OnnxModel.fromBytes(
-          File('${dir.path}/model.onnx').readAsBytesSync());
+      final model =
+          OnnxModel.fromBytes(File('${dir.path}/model.onnx').readAsBytesSync());
       final j = jsonDecode(File('${dir.path}/case.json').readAsStringSync())
           as Map<String, dynamic>;
       final inputs = (j['inputs'] as Map<String, dynamic>)
@@ -61,8 +61,7 @@ void main() {
 
       expected.forEach((outName, want) {
         final have = got[outName]!;
-        expect(have.shape, want.shape,
-            reason: '$name/$outName shape mismatch');
+        expect(have.shape, want.shape, reason: '$name/$outName shape mismatch');
         if (want.dtype == DType.int64) {
           expect(have.asIntList(), want.asIntList(),
               reason: '$name/$outName int values mismatch');

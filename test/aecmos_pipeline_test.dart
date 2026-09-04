@@ -52,8 +52,8 @@ double _maxRelDiff(List<double> got, List<dynamic> wantJson,
   return max;
 }
 
-Float32List _floats(dynamic j) => Float32List.fromList(
-    [for (final v in j as List) (v as num).toDouble()]);
+Float32List _floats(dynamic j) =>
+    Float32List.fromList([for (final v in j as List) (v as num).toDouble()]);
 
 void main() {
   final refFile = File('test/aecmos_reference.json');
@@ -101,7 +101,8 @@ void main() {
   });
 
   test('stage 4: mel filterbank (Slaney scale and norm)', () {
-    final dRow = _maxAbsDiff(front.melFilterRow(0), inter['mel_fb_row0'] as List);
+    final dRow =
+        _maxAbsDiff(front.melFilterRow(0), inter['mel_fb_row0'] as List);
     expect(dRow, lessThan(1e-6), reason: 'filterbank row 0 max abs diff $dRow');
     final dSums =
         _maxAbsDiff(front.melFilterRowSums(), inter['mel_fb_rowsums'] as List);
@@ -165,11 +166,9 @@ void main() {
     for (final talkType in ['st', 'nst', 'dt']) {
       final want = scores[talkType] as Map<String, dynamic>;
       final got = scorer.score(talkType, lpb, mic, enh);
-      expect(got.echoMos,
-          closeTo((want['echo_mos'] as num).toDouble(), 0.01),
+      expect(got.echoMos, closeTo((want['echo_mos'] as num).toDouble(), 0.01),
           reason: '$talkType echo MOS');
-      expect(got.otherMos,
-          closeTo((want['other_mos'] as num).toDouble(), 0.01),
+      expect(got.otherMos, closeTo((want['other_mos'] as num).toDouble(), 0.01),
           reason: '$talkType other MOS');
     }
   }, skip: skipModel);

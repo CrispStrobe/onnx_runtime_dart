@@ -189,7 +189,7 @@ model.dispose();                            // shuts the workers down
 
 ```yaml
 dependencies:
-  onnx_runtime_dart: ^0.3.4
+  onnx_runtime_dart: ^0.10.4
 ```
 
 ## Usage

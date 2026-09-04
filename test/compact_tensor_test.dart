@@ -36,8 +36,8 @@ void main() {
   test('QuantizeLinear produces compact output of the right signedness', () {
     final x = Tensor.float(Float32List.fromList([-1.0, 0.0, 1.0]), [3]);
     final scale = Tensor.scalarFloat(0.01);
-    final qU = ops.opQuantizeLinear(x, scale, Tensor.scalarInt(128),
-        lo: 0, hi: 255);
+    final qU =
+        ops.opQuantizeLinear(x, scale, Tensor.scalarInt(128), lo: 0, hi: 255);
     expect(qU.dtype, DType.uint8);
     expect(qU.asIntList(), [28, 128, 228]);
     final qS = ops.opQuantizeLinear(x, scale, null, lo: -128, hi: 127);
@@ -48,10 +48,9 @@ void main() {
   test('MatMulInteger consumes compact operands exactly', () {
     // a[1x3] u8, b[3x2] i8, exact integer expectations.
     final a = Tensor.uint8(Uint8List.fromList([10, 130, 250]), [1, 3]);
-    final b =
-        Tensor.int8(Int8List.fromList([-1, 2, 3, -4, 5, 6]), [3, 2]);
-    final y = ql.opMatMulInteger(
-        a, b, Tensor.scalarInt(10), Tensor.scalarInt(1));
+    final b = Tensor.int8(Int8List.fromList([-1, 2, 3, -4, 5, 6]), [3, 2]);
+    final y =
+        ql.opMatMulInteger(a, b, Tensor.scalarInt(10), Tensor.scalarInt(1));
     // (a-10) = [0,120,240]; (b-1) = [[-2,1],[2,-5],[4,5]]
     // y = [0*-2+120*2+240*4, 0*1+120*-5+240*5] = [1200, 600]
     expect(y.asIntList(), [1200, 600]);

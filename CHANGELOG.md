@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.10.4
+
+- **Fast CNN global-average pooling.** `ReduceMean` now recognizes any
+  contiguous trailing block of axes, including NCHW spatial axes `[2, 3]`, and
+  reduces each contiguous row directly instead of allocating coordinates for
+  every element.
+- **Reusable convolution workspaces.** Each graph executor retains and grows
+  one im2col scratch buffer per convolution node, eliminating repeated
+  multi-megabyte transient allocations across inference runs.
+- **Residual `Add` + `Relu` fusion.** Single-consumer residual epilogues are
+  fused at load time into one allocation and one pass, while observed or
+  broadcast intermediates retain the ordinary operator semantics.
+- **Injectable stochastic buffers.** `OnnxRandomInject` lets parity and
+  determinism harnesses supply exact `RandomNormal` / `RandomUniform` tensors
+  for one run without changing normal seeded runtime behavior.
+
 ## 0.10.3
 
 - **VITS / RVC / so-vits-svc family now runs.** Verified the full 4938-node RVC

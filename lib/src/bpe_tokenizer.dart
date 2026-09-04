@@ -28,9 +28,17 @@ class BpeTokenizer {
   final RegExp? _specialRe;
   final bool _nfc, _nfkc; // declared normalizer (e.g. Qwen uses NFC)
 
-  BpeTokenizer._(this.vocab, this.idToToken, this.mergeRank, this.specials,
-      this.byteEncoder, this.byteDecoder, this._splitRe, this._specialRe,
-      this._nfc, this._nfkc);
+  BpeTokenizer._(
+      this.vocab,
+      this.idToToken,
+      this.mergeRank,
+      this.specials,
+      this.byteEncoder,
+      this.byteDecoder,
+      this._splitRe,
+      this._specialRe,
+      this._nfc,
+      this._nfkc);
 
   factory BpeTokenizer.fromFile(String path) =>
       BpeTokenizer.fromJson(File(path).readAsStringSync());
@@ -190,7 +198,10 @@ class BpeTokenizer {
     for (final m in _splitRe.allMatches(text)) {
       final piece = m.group(0)!;
       // Byte-level: UTF-8 bytes -> unicode chars, one char per byte.
-      final chars = [for (final byte in utf8.encode(piece)) String.fromCharCode(byteEncoder[byte]!)];
+      final chars = [
+        for (final byte in utf8.encode(piece))
+          String.fromCharCode(byteEncoder[byte]!)
+      ];
       for (final tok in _bpe(chars)) {
         final id = vocab[tok];
         if (id != null) ids.add(id);
@@ -203,7 +214,8 @@ class BpeTokenizer {
   /// [maxLength] truncates the result (byte-level BPE has no template specials);
   /// [direction] keeps the front (`right`) or tail.
   List<int> encode(String text,
-      {int? maxLength, TruncationDirection direction = TruncationDirection.right}) {
+      {int? maxLength,
+      TruncationDirection direction = TruncationDirection.right}) {
     final ids = <int>[];
     if (_specialRe == null) {
       ids.addAll(_encodeChunk(text));

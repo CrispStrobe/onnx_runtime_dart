@@ -59,11 +59,13 @@ void main() {
       }
     });
 
-    for (final (m, k, n) in [(1, 384, 384), (33, 65, 17), (7, 128, 5),
-        (128, 64, 128), (5, 1, 9), (64, 384, 1),
-        // m=1 GEMV fast path: n values that exercise the 16-wide tile plus the
-        // 4-column and scalar-tail remainders (151 = 9·16+4+3, 19 = 16+3).
-        (1, 40, 151), (1, 128, 19), (1, 896, 512)]) {
+    for (final (m, k, n) in [
+      (1, 384, 384), (33, 65, 17), (7, 128, 5),
+      (128, 64, 128), (5, 1, 9), (64, 384, 1),
+      // m=1 GEMV fast path: n values that exercise the 16-wide tile plus the
+      // 4-column and scalar-tail remainders (151 = 9·16+4+3, 19 = 16+3).
+      (1, 40, 151), (1, 128, 19), (1, 896, 512)
+    ]) {
       test('$name kernel: ${m}x${k}x$n', () {
         final a = _rand(m * k), b = _rand(k * n);
         final out = Float32List(m * n);
@@ -88,7 +90,9 @@ void main() {
         final want = _naive(
             Float32List.sublistView(a, batch * m * k, (batch + 1) * m * k),
             Float32List.sublistView(b, batch * k * n, (batch + 1) * k * n),
-            m, k, n);
+            m,
+            k,
+            n);
         for (int x = 0; x < want.length; x++) {
           expect(out[batch * m * n + x], closeTo(want[x], 1e-5),
               reason: '$name batch=$batch at $x');

@@ -20,7 +20,9 @@ void main() {
   for (var i = 0; i < hidden.length; i++) {
     hidden[i] = rng.nextDouble() * 2 - 1;
   }
-  final inputs = {'hidden': Tensor.float(hidden, [1, seq, h])};
+  final inputs = {
+    'hidden': Tensor.float(hidden, [1, seq, h])
+  };
 
   test('lastTokenLogits slices logits to the final position, bit-exact', () {
     final full = OnnxModel.fromBytes(bytes);
@@ -30,7 +32,8 @@ void main() {
 
     final fast = OnnxModel.fromBytes(bytes, lastTokenLogits: true);
     final fastLogits = fast.run(inputs, ['logits'])['logits']!;
-    expect(fastLogits.shape, [1, 1, v], reason: 'only the last row is computed');
+    expect(fastLogits.shape, [1, 1, v],
+        reason: 'only the last row is computed');
 
     final fa = fullLogits.asFloatList(), ga = fastLogits.asFloatList();
     for (var i = 0; i < v; i++) {
@@ -39,11 +42,12 @@ void main() {
   });
 
   test('lastTokenLogits is a no-op on a single-position input', () {
-    final one = {'hidden': Tensor.float(Float32List(h), [1, 1, h])};
+    final one = {
+      'hidden': Tensor.float(Float32List(h), [1, 1, h])
+    };
     final full = OnnxModel.fromBytes(bytes).run(one, ['logits'])['logits']!;
-    final fast =
-        OnnxModel.fromBytes(bytes, lastTokenLogits: true).run(one, ['logits'])[
-            'logits']!;
+    final fast = OnnxModel.fromBytes(bytes, lastTokenLogits: true)
+        .run(one, ['logits'])['logits']!;
     expect(fast.shape, full.shape);
     expect(fast.asFloatList(), full.asFloatList());
   });

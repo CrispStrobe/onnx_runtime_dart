@@ -14,8 +14,7 @@ void main() {
     expect(tok.tokens('hello'), ['<s>', '▁hello', '</s>']);
   });
   test('word boundary becomes ▁ and segments greedily by score', () {
-    expect(tok.tokens('he world'),
-        ['<s>', '▁he', '▁wor', 'ld', '</s>']);
+    expect(tok.tokens('he world'), ['<s>', '▁he', '▁wor', 'ld', '</s>']);
   });
   test('NFKC folds full-width digits before segmentation', () {
     // Full-width １２ -> 1 2

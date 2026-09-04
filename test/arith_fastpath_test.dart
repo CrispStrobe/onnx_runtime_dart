@@ -25,12 +25,9 @@ Tensor _rand(List<int> shape) {
 /// Naive reference: full per-element coordinate decomposition, no fast paths.
 Tensor _refBinary(Tensor a, Tensor b, double Function(double, double) f) {
   final rank = math.max(a.rank, b.rank);
-  List<int> pad(List<int> s) =>
-      [...List.filled(rank - s.length, 1), ...s];
+  List<int> pad(List<int> s) => [...List.filled(rank - s.length, 1), ...s];
   final ap = pad(a.shape), bp = pad(b.shape);
-  final outShape = <int>[
-    for (int k = 0; k < rank; k++) math.max(ap[k], bp[k])
-  ];
+  final outShape = <int>[for (int k = 0; k < rank; k++) math.max(ap[k], bp[k])];
   final n = outShape.fold<int>(1, (x, y) => x * y);
   final out = Float32List(n);
   for (int flat = 0; flat < n; flat++) {
@@ -52,23 +49,66 @@ Tensor _refBinary(Tensor a, Tensor b, double Function(double, double) f) {
 
 void main() {
   final shapePairs = <List<List<int>>>[
-    [[2, 5, 8], [2, 5, 8]], // same shape
-    [[2, 5, 8], []], // scalar rhs (rank 0)
-    [[2, 5, 8], [1]], // scalar rhs (rank 1)
-    [[], [2, 5, 8]], // scalar lhs
-    [[2, 5, 8], [2, 5, 1]], // per-row scalar (LayerNorm mean/std)
-    [[2, 5, 1], [2, 5, 8]], // reverse: general path
-    [[2, 5, 8], [8]], // bias: suffix of length 1 axis group
-    [[2, 5, 8], [5, 8]], // suffix, 2 axes
-    [[2, 5, 8], [1, 1, 8]], // suffix with leading 1s
-    [[8], [2, 5, 8]], // suffix-tile, a smaller
-    [[5, 8], [2, 5, 8]],
-    [[2, 1, 4, 3], [5, 1, 3]], // internal broadcast → general path
-    [[2, 1, 8], [2, 5, 8]], // middle-dim broadcast → general path
-    [[4, 1], [1, 6]], // outer product style → general path
+    [
+      [2, 5, 8],
+      [2, 5, 8]
+    ], // same shape
+    [
+      [2, 5, 8],
+      []
+    ], // scalar rhs (rank 0)
+    [
+      [2, 5, 8],
+      [1]
+    ], // scalar rhs (rank 1)
+    [
+      [],
+      [2, 5, 8]
+    ], // scalar lhs
+    [
+      [2, 5, 8],
+      [2, 5, 1]
+    ], // per-row scalar (LayerNorm mean/std)
+    [
+      [2, 5, 1],
+      [2, 5, 8]
+    ], // reverse: general path
+    [
+      [2, 5, 8],
+      [8]
+    ], // bias: suffix of length 1 axis group
+    [
+      [2, 5, 8],
+      [5, 8]
+    ], // suffix, 2 axes
+    [
+      [2, 5, 8],
+      [1, 1, 8]
+    ], // suffix with leading 1s
+    [
+      [8],
+      [2, 5, 8]
+    ], // suffix-tile, a smaller
+    [
+      [5, 8],
+      [2, 5, 8]
+    ],
+    [
+      [2, 1, 4, 3],
+      [5, 1, 3]
+    ], // internal broadcast → general path
+    [
+      [2, 1, 8],
+      [2, 5, 8]
+    ], // middle-dim broadcast → general path
+    [
+      [4, 1],
+      [1, 6]
+    ], // outer product style → general path
   ];
 
-  final fns = <String, (Tensor Function(Tensor, Tensor), double Function(double, double))>{
+  final fns = <String,
+      (Tensor Function(Tensor, Tensor), double Function(double, double))>{
     'Add': (ops.opAdd, (x, y) => x + y),
     'Sub': (ops.opSub, (x, y) => x - y),
     'Mul': (ops.opMul, (x, y) => x * y),
@@ -81,8 +121,8 @@ void main() {
       // 0.5 exponent needs positive bases: square the inputs first.
       final base = e == 0.5 ? ops.opMul(a, a) : a;
       final got = ops.opPow(base, Tensor.scalarFloat(e));
-      final want =
-          _refBinary(base, Tensor.scalarFloat(e), (x, y) => math.pow(x, y).toDouble());
+      final want = _refBinary(
+          base, Tensor.scalarFloat(e), (x, y) => math.pow(x, y).toDouble());
       expect(got.shape, want.shape);
       final g = got.asFloatList(), w = want.asFloatList();
       for (int k = 0; k < w.length; k++) {

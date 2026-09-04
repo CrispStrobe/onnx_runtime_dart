@@ -20,8 +20,8 @@ class GemmPool {
 
   static Future<GemmPool> spawn(
           int workers, Map<String, (Float32List, int, int)> toPartition,
-          [Map<String, (Float32List, List<int>, Float32List?)>
-              convToReplicate = const {}]) =>
+          [Map<String, (Float32List, List<int>, Float32List?)> convToReplicate =
+              const {}]) =>
       throw UnsupportedError(
           'Parallel execution requires isolates (native targets only)');
 

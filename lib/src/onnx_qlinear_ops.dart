@@ -112,7 +112,9 @@ Tensor opQLinearMatMul(Tensor a, Tensor aS, Tensor? aZp, Tensor b, Tensor bS,
 /// a transposed [K×N] buffer per call (weights stay packed in memory — that
 /// is the point of int4 — and the GEMM rides the SIMD kernel).
 Tensor opMatMulNBits(Tensor a, Tensor bQ, Tensor scales, Tensor? zeroPoints,
-    {required int k, required int n, required int bits,
+    {required int k,
+    required int n,
+    required int bits,
     required int blockSize}) {
   if (bits != 4) {
     throw UnsupportedError('MatMulNBits: only bits=4 supported, got $bits');
@@ -219,13 +221,13 @@ Int64List _convIntAcc(
   return out;
 }
 
-List<int> _convOutSpatial(Tensor x, Tensor w, List<int> strides,
-    List<int> pads, List<int> dilations) {
+List<int> _convOutSpatial(Tensor x, Tensor w, List<int> strides, List<int> pads,
+    List<int> dilations) {
   final out = <int>[];
   for (int a = 0; a < 2; a++) {
     final window = dilations[a] * (w.shape[2 + a] - 1) + 1;
-    out.add((x.shape[2 + a] + pads[a] + pads[2 + a] - window) ~/ strides[a] +
-        1);
+    out.add(
+        (x.shape[2 + a] + pads[a] + pads[2 + a] - window) ~/ strides[a] + 1);
   }
   return out;
 }
@@ -233,7 +235,9 @@ List<int> _convOutSpatial(Tensor x, Tensor w, List<int> strides,
 /// `ConvInteger` (1-D or 2-D): int32 accumulator output. 1-D convs run as
 /// 2-D with a singleton height.
 Tensor opConvInteger(Tensor x, Tensor w, Tensor? xZp, Tensor? wZp,
-    {List<int>? strides, List<int>? pads, List<int>? dilations,
+    {List<int>? strides,
+    List<int>? pads,
+    List<int>? dilations,
     int group = 1}) {
   if (x.rank == 3) {
     final y = opConvInteger(

@@ -29,8 +29,7 @@ class PartitionedWeight {
   final int k, n;
   final List<int> colCounts;
   PartitionedWeight(this.k, this.n, this.colCounts);
-  int colStart(int w) =>
-      colCounts.take(w).fold(0, (a, b) => a + b);
+  int colStart(int w) => colCounts.take(w).fold(0, (a, b) => a + b);
 }
 
 void _workerMain(SendPort toMain) {
@@ -122,7 +121,9 @@ class GemmPool {
     for (final entry in toPartition.entries) {
       final (data, k, n) = entry.value;
       final base = n ~/ workers, rem = n % workers;
-      final counts = [for (int w = 0; w < workers; w++) base + (w < rem ? 1 : 0)];
+      final counts = [
+        for (int w = 0; w < workers; w++) base + (w < rem ? 1 : 0)
+      ];
       weights[entry.key] = PartitionedWeight(k, n, counts);
       int col = 0;
       for (int w = 0; w < workers; w++) {

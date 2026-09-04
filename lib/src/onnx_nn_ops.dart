@@ -54,9 +54,10 @@ import 'tensor.dart';
         p[k] = pads == null ? 0 : pads[k];
         p[nd + k] = pads == null ? 0 : pads[nd + k];
         final span = inDims[k] + p[k] + p[nd + k] - window;
-        out[k] =
-            (ceilMode ? (span + strides[k] - 1) ~/ strides[k] : span ~/ strides[k]) +
-                1;
+        out[k] = (ceilMode
+                ? (span + strides[k] - 1) ~/ strides[k]
+                : span ~/ strides[k]) +
+            1;
         if (ceilMode) {
           // Spec: the last window must start inside the input or begin-pad.
           if ((out[k] - 1) * strides[k] >= inDims[k] + p[k]) out[k]--;
@@ -81,8 +82,7 @@ int _roundEvenNn(double v) {
 /// Output spatial dims for a Conv with these parameters (used by the
 /// executor to plan the isolate-pool band split without running the conv).
 List<int> convOutputSpatial(List<int> inSp, List<int> kernel,
-    List<int>? strides, List<int>? pads, List<int>? dilations,
-    String autoPad) {
+    List<int>? strides, List<int>? pads, List<int>? dilations, String autoPad) {
   final nd = inSp.length;
   final (_, outSp) = _resolvePads(
       inDims: inSp,
@@ -115,7 +115,8 @@ Tensor opConv(
   Float32List? workspace,
 }) {
   final nd = x.rank - 2;
-  assert(nd >= 1 && nd <= 3, 'Conv supports 1-3 spatial dims, got rank ${x.rank}');
+  assert(
+      nd >= 1 && nd <= 3, 'Conv supports 1-3 spatial dims, got rank ${x.rank}');
   assert(w.rank == x.rank, 'Conv weight rank must match input rank');
   if (nd == 1) {
     // 1-D convs ride the 2-D im2col/GEMM machinery (the generic N-D path
@@ -229,9 +230,16 @@ Tensor opConv(
           final outOff = (b * m + g * mPerGroup) * colN;
           // Weight rows are already [mPerGroup × colRows] contiguously.
           // Pointwise convs read the input rows matching the output band.
-          gemm.matmulKernel(wf, g * mPerGroup * colRows, cols ?? xf,
-              cols == null ? xGroupBase + b0 * wd : 0, out, outOff, mPerGroup,
-              colRows, colN);
+          gemm.matmulKernel(
+              wf,
+              g * mPerGroup * colRows,
+              cols ?? xf,
+              cols == null ? xGroupBase + b0 * wd : 0,
+              out,
+              outOff,
+              mPerGroup,
+              colRows,
+              colN);
         }
       }
       if (bf != null) {
@@ -258,8 +266,8 @@ Tensor opConv(
         final xBase = (b * cIn + om) * h * wd;
         xpad.fillRange(0, xpad.length, 0);
         for (int y = 0; y < h; y++) {
-          xpad.setRange((y + ph) * wp + pw, (y + ph) * wp + pw + wd, xf,
-              xBase + y * wd);
+          xpad.setRange(
+              (y + ph) * wp + pw, (y + ph) * wp + pw + wd, xf, xBase + y * wd);
         }
         final acc0 = bf == null ? 0.0 : bf[om];
         final wBase = om * kh * kw;
@@ -818,9 +826,8 @@ Tensor opGridSample(Tensor x, Tensor grid,
   final xf = x.asFloatList(), gf = grid.asFloatList();
   final out = Float32List(n * c * ho * wo);
 
-  double unnormalize(double v, int size) => alignCorners
-      ? (v + 1) / 2 * (size - 1)
-      : ((v + 1) * size - 1) / 2;
+  double unnormalize(double v, int size) =>
+      alignCorners ? (v + 1) / 2 * (size - 1) : ((v + 1) * size - 1) / 2;
 
   double reflect(double v, int size) {
     if (size == 1) return 0;
@@ -873,11 +880,10 @@ Tensor opGridSample(Tensor x, Tensor grid,
         final w21 = fy * (1 - fx), w22 = fy * fx;
         for (int ch = 0; ch < c; ch++) {
           final base = (b * c + ch) * planeSize;
-          out[outIdx + ch * ho * wo] =
-              (o11 < 0 ? 0 : xf[base + o11] * w11) +
-                  (o12 < 0 ? 0 : xf[base + o12] * w12) +
-                  (o21 < 0 ? 0 : xf[base + o21] * w21) +
-                  (o22 < 0 ? 0 : xf[base + o22] * w22);
+          out[outIdx + ch * ho * wo] = (o11 < 0 ? 0 : xf[base + o11] * w11) +
+              (o12 < 0 ? 0 : xf[base + o12] * w12) +
+              (o21 < 0 ? 0 : xf[base + o21] * w21) +
+              (o22 < 0 ? 0 : xf[base + o22] * w22);
         }
       }
     }
@@ -965,8 +971,8 @@ Tensor opRoiAlign(Tensor x, Tensor rois, Tensor batchIndices,
 // Resize
 // ---------------------------------------------------------------------------
 
-double _sourceCoord(int outIdx, double scale, int inDim, int outDim,
-    String coordMode) {
+double _sourceCoord(
+    int outIdx, double scale, int inDim, int outDim, String coordMode) {
   switch (coordMode) {
     case 'align_corners':
       return outDim == 1 ? 0 : outIdx * (inDim - 1) / (outDim - 1);
@@ -992,9 +998,7 @@ Tensor opResize(Tensor x,
     // 1-D temporal resize (NCW): run as NCHW with a singleton height.
     final y = opResize(
       x.reshape([x.shape[0], x.shape[1], 1, x.shape[2]]),
-      scales: scales == null
-          ? null
-          : [scales[0], scales[1], 1.0, scales[2]],
+      scales: scales == null ? null : [scales[0], scales[1], 1.0, scales[2]],
       sizes: sizes == null ? null : [sizes[0], sizes[1], 1, sizes[2]],
       mode: mode,
       coordMode: coordMode,
@@ -1014,8 +1018,8 @@ Tensor opResize(Tensor x,
     scaleH = outH / h;
     scaleW = outW / w;
   } else {
-    assert(scales != null && scales.length == 4,
-        'Resize needs scales or sizes');
+    assert(
+        scales != null && scales.length == 4, 'Resize needs scales or sizes');
     assert(scales![0] == 1 && scales[1] == 1,
         'Resize: only spatial dims may change');
     scaleH = scales![2];
@@ -1059,10 +1063,10 @@ Tensor opResize(Tensor x,
           final y0 = fy0.clamp(0, h - 1), x0 = fx0.clamp(0, w - 1);
           final y1 = (fy0 + 1).clamp(0, h - 1), x1 = (fx0 + 1).clamp(0, w - 1);
           final fy = sy - fy0, fx = sx - fx0;
-          final top = xf[base + y0 * w + x0] * (1 - fx) +
-              xf[base + y0 * w + x1] * fx;
-          final bot = xf[base + y1 * w + x0] * (1 - fx) +
-              xf[base + y1 * w + x1] * fx;
+          final top =
+              xf[base + y0 * w + x0] * (1 - fx) + xf[base + y0 * w + x1] * fx;
+          final bot =
+              xf[base + y1 * w + x0] * (1 - fx) + xf[base + y1 * w + x1] * fx;
           v = top * (1 - fy) + bot * fy;
         }
         out[outBase + oy * outW + ox] = v;

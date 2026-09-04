@@ -24,12 +24,13 @@ void main() {
     expect(tok.tokens('xyzzy'), ['[CLS]', '[UNK]', '[SEP]']);
   });
   test('greedy longest-match subwords', () {
-    expect(tok.tokens('tokenization'),
-        ['[CLS]', 'token', '##ization', '[SEP]']);
+    expect(
+        tok.tokens('tokenization'), ['[CLS]', 'token', '##ization', '[SEP]']);
   });
 
   test('cased config preserves case and accents', () {
-    final cased = WordPieceTokenizer.fromFile('test/data/tiny_wordpiece_cased.json');
+    final cased =
+        WordPieceTokenizer.fromFile('test/data/tiny_wordpiece_cased.json');
     // lowercase=false, strip_accents=false: "Hello" and "Café" stay intact.
     expect(cased.tokens('Hello, World!'),
         ['[CLS]', 'Hello', ',', 'World', '!', '[SEP]']);
@@ -47,8 +48,7 @@ void main() {
   test('maxLength truncates content, reserving special tokens', () {
     const text = 'hello world hello world !';
     // budget = maxLength(4) - 2 specials = 2 content tokens.
-    expect(
-        tok.encode('hello world', maxLength: 5).map((i) => tok.idToToken[i]),
+    expect(tok.encode('hello world', maxLength: 5).map((i) => tok.idToToken[i]),
         ['[CLS]', 'hello', 'world', '[SEP]']); // fits, unchanged
     final right = tok.encode(text, maxLength: 4);
     expect(right.length, 4);

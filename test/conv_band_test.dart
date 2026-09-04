@@ -23,16 +23,42 @@ Tensor _rand(List<int> shape) {
 
 void main() {
   final cases = <(String, Tensor, Tensor, Map<String, dynamic>)>[
-    ('3x3 pads', _rand([1, 3, 9, 9]), _rand([4, 3, 3, 3]),
-        {'pads': [1, 1, 1, 1]}),
-    ('strided', _rand([2, 2, 11, 9]), _rand([3, 2, 3, 3]),
-        {'strides': [2, 2], 'pads': [1, 0, 1, 0]}),
+    (
+      '3x3 pads',
+      _rand([1, 3, 9, 9]),
+      _rand([4, 3, 3, 3]),
+      {
+        'pads': [1, 1, 1, 1]
+      }
+    ),
+    (
+      'strided',
+      _rand([2, 2, 11, 9]),
+      _rand([3, 2, 3, 3]),
+      {
+        'strides': [2, 2],
+        'pads': [1, 0, 1, 0]
+      }
+    ),
     ('pointwise', _rand([1, 4, 7, 7]), _rand([5, 4, 1, 1]), {}),
-    ('depthwise', _rand([1, 4, 8, 8]), _rand([4, 1, 3, 3]),
-        {'group': 4, 'pads': [1, 1, 1, 1]}),
+    (
+      'depthwise',
+      _rand([1, 4, 8, 8]),
+      _rand([4, 1, 3, 3]),
+      {
+        'group': 4,
+        'pads': [1, 1, 1, 1]
+      }
+    ),
     ('grouped', _rand([1, 4, 6, 6]), _rand([6, 2, 3, 3]), {'group': 2}),
-    ('dilated', _rand([1, 2, 10, 10]), _rand([2, 2, 3, 3]),
-        {'dilations': [2, 2]}),
+    (
+      'dilated',
+      _rand([1, 2, 10, 10]),
+      _rand([2, 2, 3, 3]),
+      {
+        'dilations': [2, 2]
+      }
+    ),
   ];
 
   for (final (name, x, w, opts) in cases) {
@@ -60,11 +86,8 @@ void main() {
         final rows = cuts[b + 1] - cuts[b];
         expect(slab.shape, [n, m, rows, ow]);
         for (int img = 0; img < n * m; img++) {
-          stitched.setRange(
-              (img * oh + cuts[b]) * ow,
-              (img * oh + cuts[b + 1]) * ow,
-              slab.f!,
-              img * rows * ow);
+          stitched.setRange((img * oh + cuts[b]) * ow,
+              (img * oh + cuts[b + 1]) * ow, slab.f!, img * rows * ow);
         }
       }
       expect(stitched, full.asFloatList(),
