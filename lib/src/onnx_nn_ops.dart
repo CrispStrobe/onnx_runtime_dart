@@ -112,6 +112,7 @@ Tensor opConv(
   String autoPad = 'NOTSET',
   int? bandStart,
   int? bandEnd,
+  Float32List? workspace,
 }) {
   final nd = x.rank - 2;
   assert(nd >= 1 && nd <= 3, 'Conv supports 1-3 spatial dims, got rank ${x.rank}');
@@ -128,6 +129,7 @@ Tensor opConv(
       dilations: [1, dilations?.first ?? 1],
       group: group,
       autoPad: autoPad,
+      workspace: workspace,
     );
     return y.reshape([y.shape[0], y.shape[1], y.shape[3]]);
   }
@@ -187,7 +189,12 @@ Tensor opConv(
           bandEnd == null;
       final colRows = cPerGroup * kh * kw;
       final colN = oh * ow;
-      final cols = pointwise ? null : Float32List(colRows * colN);
+      final workspaceSize = colRows * colN;
+      final cols = pointwise
+          ? null
+          : workspace != null && workspace.length >= workspaceSize
+              ? workspace
+              : Float32List(workspaceSize);
       for (int b = 0; b < n; b++) {
         for (int g = 0; g < group; g++) {
           final xGroupBase = (b * cIn + g * cPerGroup) * h * wd;

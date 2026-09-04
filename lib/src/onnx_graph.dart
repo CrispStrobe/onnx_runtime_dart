@@ -55,6 +55,10 @@ class OnnxGraphExecutor {
   /// call re-materializes the transpose.
   final Map<String, Tensor> _prepackedGemmB = {};
 
+  /// Per-node im2col scratch, grown for the largest shape seen and reused on
+  /// later runs. Workspaces are executor-local and never escape as outputs.
+  final Map<NodeProto, Float32List> _convWorkspaces = Map.identity();
+
   /// Nodes remaining after load-time constant folding, in execution order.
   late final List<NodeProto> _nodes;
 
@@ -975,6 +979,31 @@ class OnnxGraphExecutor {
     return Tensor.int64(out, shape);
   }
 
+  Float32List? _convWorkspace(
+      NodeProto node, Tensor x, Tensor w, _AttrMap attrs) {
+    if (!x.isFloat || !w.isFloat || x.rank != 4 || w.rank != 4) return null;
+    final cPerGroup = w.shape[1];
+    final group = attrs.getInt('group') ?? 1;
+    final mPerGroup = w.shape[0] ~/ group;
+    if (cPerGroup == 1 && mPerGroup == 1) return null;
+    final kh = w.shape[2], kw = w.shape[3];
+    final strides = attrs.getInts('strides');
+    final pads = attrs.getInts('pads');
+    final dilations = attrs.getInts('dilations');
+    final autoPad = attrs.getString('auto_pad') ?? 'NOTSET';
+    final pointwise = kh == 1 &&
+        kw == 1 &&
+        (strides == null || (strides[0] == 1 && strides[1] == 1)) &&
+        (pads == null || pads.every((v) => v == 0));
+    if (pointwise) return null;
+    final out = nn.convOutputSpatial(x.shape.sublist(2), w.shape.sublist(2),
+        strides, pads, dilations, autoPad);
+    final needed = cPerGroup * kh * kw * out[0] * out[1];
+    final existing = _convWorkspaces[node];
+    if (existing != null && existing.length >= needed) return existing;
+    return _convWorkspaces[node] = Float32List(needed);
+  }
+
   List<Tensor> _dispatch(NodeProto node, List<Tensor?> ins, _AttrMap attrs) {
     Tensor need(int i) => ins[i]!;
     switch (node.opType) {
@@ -1355,6 +1384,7 @@ class OnnxGraphExecutor {
             dilations: attrs.getInts('dilations'),
             group: attrs.getInt('group') ?? 1,
             autoPad: attrs.getString('auto_pad') ?? 'NOTSET',
+            workspace: _convWorkspace(node, need(0), need(1), attrs),
           )
         ];
       case 'ConvTranspose':
