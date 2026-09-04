@@ -388,6 +388,7 @@ class WinogradF2x2Plan {
   final List<Float32List> weights;
   List<Float32List>? _inputTransforms;
   List<Float32List>? _products;
+  Float32List? _paddedInput;
   int _tiles = 0;
 
   WinogradF2x2Plan(this.weights);
@@ -399,6 +400,16 @@ class WinogradF2x2Plan {
       _products = List.generate(16, (_) => Float32List(m * _tiles));
     }
     return (_inputTransforms!, _products!);
+  }
+
+  Float32List paddedInput(int c, int paddedH, int paddedW) {
+    final needed = c * paddedH * paddedW;
+    if (_paddedInput == null || _paddedInput!.length < needed) {
+      _paddedInput = Float32List(needed);
+    } else {
+      _paddedInput!.fillRange(0, needed, 0);
+    }
+    return _paddedInput!;
   }
 }
 
@@ -436,31 +447,35 @@ Tensor _convWinogradF2x2(Float32List x, WinogradF2x2Plan plan,
   final th = (h + 1) >> 1, tw = (w + 1) >> 1, tiles = th * tw;
   final (v, products) = plan.scratch(c, m, tiles);
   final u = plan.weights;
-  final d = Float64List(16), tmp = Float64List(16);
+  final ph = th * 2 + 2, pw = tw * 2 + 2;
+  final padded = plan.paddedInput(c, ph, pw);
+  final tmp = Float64List(16);
   final out = Float32List(n * m * h * w);
   for (int b = 0; b < n; b++) {
+    for (int ic = 0; ic < c; ic++) {
+      final source = (b * c + ic) * h * w;
+      final target = ic * ph * pw + pw + 1;
+      for (int y = 0; y < h; y++) {
+        padded.setRange(
+            target + y * pw, target + y * pw + w, x, source + y * w);
+      }
+    }
     for (final q in v) {
       q.fillRange(0, q.length, 0);
     }
     for (int ic = 0; ic < c; ic++) {
-      final xb = (b * c + ic) * h * w;
+      final xb = ic * ph * pw;
       for (int ty = 0; ty < th; ty++) {
         for (int tx = 0; tx < tw; tx++) {
-          for (int iy = 0; iy < 4; iy++) {
-            final sy = ty * 2 + iy - 1;
-            for (int ix = 0; ix < 4; ix++) {
-              final sx = tx * 2 + ix - 1;
-              d[iy * 4 + ix] = sy >= 0 && sy < h && sx >= 0 && sx < w
-                  ? x[xb + sy * w + sx]
-                  : 0;
-            }
-          }
           for (int r = 0; r < 4; r++) {
             final o = r * 4;
-            tmp[o] = d[o] - d[o + 2];
-            tmp[o + 1] = d[o + 1] + d[o + 2];
-            tmp[o + 2] = -d[o + 1] + d[o + 2];
-            tmp[o + 3] = d[o + 1] - d[o + 3];
+            final source = xb + (ty * 2 + r) * pw + tx * 2;
+            final d0 = padded[source], d1 = padded[source + 1];
+            final d2 = padded[source + 2], d3 = padded[source + 3];
+            tmp[o] = d0 - d2;
+            tmp[o + 1] = d1 + d2;
+            tmp[o + 2] = -d1 + d2;
+            tmp[o + 3] = d1 - d3;
           }
           final tile = ty * tw + tx;
           for (int col = 0; col < 4; col++) {

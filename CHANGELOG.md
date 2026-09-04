@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.10.7
+
+- **Branchless Winograd input transforms.** A reusable padded input lets every
+  4x4 tile load without edge checks, and the row transform now consumes those
+  samples directly instead of materializing and rereading a temporary tile.
+  On Maia/Lc0, paired 100-pass trials improved mean inference from 24.75 ms to
+  20.85 ms (~16%) and minimum latency from 16.7-17.2 ms to 14.3-14.8 ms.
+
 ## 0.10.6
 
 - **Reusable Winograd scratch.** Input transforms and transformed products are
