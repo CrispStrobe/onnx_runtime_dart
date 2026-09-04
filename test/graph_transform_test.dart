@@ -109,6 +109,55 @@ void main() {
   });
 
   group('pattern fusion', () {
+    GraphProto addReluGraph({bool leakIntermediate = false}) {
+      final g = GraphProto()
+        ..input.addAll([
+          ValueInfoProto()..name = 'A',
+          ValueInfoProto()..name = 'B',
+        ])
+        ..output.add(ValueInfoProto()..name = 'Y')
+        ..node.addAll([
+          NodeProto()
+            ..opType = 'Add'
+            ..input.addAll(['A', 'B'])
+            ..output.add('sum'),
+          NodeProto()
+            ..opType = 'Relu'
+            ..input.add('sum')
+            ..output.add('Y'),
+        ]);
+      if (leakIntermediate) {
+        g.output.add(ValueInfoProto()..name = 'sum');
+      }
+      return g;
+    }
+
+    test('Add-Relu chain fuses into one pass', () {
+      final model = OnnxModel.fromBytes(
+          (ModelProto()..graph = addReluGraph()).writeToBuffer());
+      final profile = ExecutionProfile();
+      final y = model.run({
+        'A': Tensor.float(Float32List.fromList([-3, 2, 5]), [3]),
+        'B': Tensor.float(Float32List.fromList([1, -4, 6]), [3]),
+      }, ['Y'], profile: profile)['Y']!;
+      expect(y.asFloatList(), [0.0, 0.0, 11.0]);
+      expect(profile.callsByOp, {'_FusedAddRelu': 1});
+    });
+
+    test('Add-Relu fusion preserves an observed sum', () {
+      final model = OnnxModel.fromBytes(
+          (ModelProto()..graph = addReluGraph(leakIntermediate: true))
+              .writeToBuffer());
+      final profile = ExecutionProfile();
+      final out = model.run({
+        'A': Tensor.float(Float32List.fromList([-3, 2]), [2]),
+        'B': Tensor.float(Float32List.fromList([1, -4]), [2]),
+      }, ['Y', 'sum'], profile: profile);
+      expect(out['sum']!.asFloatList(), [-2.0, -2.0]);
+      expect(out['Y']!.asFloatList(), [0.0, 0.0]);
+      expect(profile.callsByOp, {'Add': 1, 'Relu': 1});
+    });
+
     GraphProto geluGraph({bool leakIntermediate = false}) {
       final g = GraphProto()
         ..input.add(ValueInfoProto()..name = 'X')

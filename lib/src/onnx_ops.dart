@@ -393,6 +393,32 @@ Tensor _elementwiseBinary(
 Tensor opAdd(Tensor a, Tensor b) =>
     _arithFloatFast(a, b, _Arith.add) ??
     _elementwiseBinary(a, b, (x, y) => x + y);
+
+/// Fused `Relu(Add(a, b))` used by residual CNN blocks.
+///
+/// Equal-shape float tensors are overwhelmingly the common case and can be
+/// produced in one allocation and one pass. Other dtypes/broadcast shapes
+/// retain the exact generic operator semantics.
+Tensor opAddRelu(Tensor a, Tensor b) {
+  final af = a.f, bf = b.f;
+  if (af != null && bf != null && _shapeEq(a.shape, b.shape)) {
+    final out = Float32List(af.length);
+    for (int k = 0; k < af.length; k++) {
+      final v = af[k] + bf[k];
+      out[k] = v < 0.0 ? 0.0 : v;
+    }
+    return Tensor.float(out, a.shape);
+  }
+  final sum = opAdd(a, b);
+  final sf = sum.f;
+  if (sf != null) {
+    for (int k = 0; k < sf.length; k++) {
+      if (sf[k] < 0.0) sf[k] = 0.0;
+    }
+    return sum;
+  }
+  return opRelu(sum);
+}
 Tensor opSub(Tensor a, Tensor b) =>
     _arithFloatFast(a, b, _Arith.sub) ??
     _elementwiseBinary(a, b, (x, y) => x - y);

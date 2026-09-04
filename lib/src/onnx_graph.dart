@@ -122,6 +122,7 @@ class OnnxGraphExecutor {
   /// exactly one consumer and is not a graph output.
   ///
   /// - erf-GELU: `0.5 * x * (1 + Erf(x / sqrt(2)))` (5 nodes -> _FusedGelu)
+  /// - residual activation: `Relu(Add(a, b))` (2 nodes -> _FusedAddRelu)
   /// - scaled-dot-product attention epilogue:
   ///   `MatMul(Softmax(MatMul(A,B)/c + mask), V)` -> _FusedSDPA, folding the
   ///   scale + mask + softmax into one pass over the attention matrix.
@@ -189,6 +190,22 @@ class OnnxGraphExecutor {
 
     final removed = <NodeProto>{};
     final replaceAt = <NodeProto, NodeProto>{}; // pattern tail -> fused node
+
+    // Residual CNN blocks conventionally end in Add(skip, branch) -> Relu.
+    // Combining them avoids materializing and then rereading the full Add
+    // output. Keep the ordinary nodes when the intermediate is observed by
+    // another consumer or is itself a graph output.
+    for (final add in nodes) {
+      if (add.opType != 'Add' || add.input.length != 2) continue;
+      final relu = soleConsumer(add.output[0]);
+      if (relu == null || relu.opType != 'Relu') continue;
+      removed.add(add);
+      replaceAt[relu] = NodeProto()
+        ..opType = '_FusedAddRelu'
+        ..name = 'fused_add_relu_${relu.output[0]}'
+        ..input.addAll(add.input)
+        ..output.addAll(relu.output);
+    }
 
     for (final erf in nodes) {
       if (erf.opType != 'Erf') continue;
@@ -968,6 +985,8 @@ class OnnxGraphExecutor {
         return [_sliceLastSeq(need(0))];
       case '_FusedGelu':
         return [ops.opGelu(need(0))];
+      case '_FusedAddRelu':
+        return [ops.opAddRelu(need(0), need(1))];
       case '_FusedGlu':
         return [ops.opGlu(need(0), attrs.getInt('axis') ?? 0)];
       case '_FusedRMSNorm':
