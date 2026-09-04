@@ -22,6 +22,26 @@ Tensor _rand(List<int> shape) {
 }
 
 void main() {
+  test('Winograd F(2x2,3x3) matches im2col convolution', () {
+    for (final shape in <List<int>>[
+      [1, 3, 8, 8],
+      [2, 3, 7, 9],
+      [1, 5, 2, 3],
+    ]) {
+      final x = _rand(shape);
+      final w = _rand([4, shape[1], 3, 3]);
+      final bias = _rand([4]);
+      final reference = nn.opConv(x, w, bias, pads: [1, 1, 1, 1]);
+      final actual = nn.opConv(x, w, bias,
+          pads: [1, 1, 1, 1], winogradWeights: nn.pretransformWinogradF2x2(w));
+      expect(actual.shape, reference.shape);
+      for (int i = 0; i < actual.length; i++) {
+        expect(actual.getD(i), closeTo(reference.getD(i), 2e-5),
+            reason: 'shape=$shape element=$i');
+      }
+    }
+  });
+
   final cases = <(String, Tensor, Tensor, Map<String, dynamic>)>[
     (
       '3x3 pads',

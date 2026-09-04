@@ -113,6 +113,7 @@ Tensor opConv(
   int? bandStart,
   int? bandEnd,
   Float32List? workspace,
+  List<Float32List>? winogradWeights,
 }) {
   final nd = x.rank - 2;
   assert(
@@ -171,6 +172,23 @@ Tensor opConv(
     // Depthwise (1 in / 1 out channel per group): im2col+GEMM degenerates to
     // m=1 matmuls where packing dominates — the direct loop wins.
     final depthwise = cPerGroup == 1 && mPerGroup == 1;
+
+    if (winogradWeights != null &&
+        group == 1 &&
+        kh == 3 &&
+        kw == 3 &&
+        sh == 1 &&
+        sw == 1 &&
+        dh == 1 &&
+        dw == 1 &&
+        ph == 1 &&
+        pw == 1 &&
+        p[2] == 1 &&
+        p[3] == 1 &&
+        bandStart == null &&
+        bandEnd == null) {
+      return _convWinogradF2x2(xf, winogradWeights, bf, n, cIn, m, h, wd);
+    }
 
     if (!depthwise) {
       // 1x1/stride-1/no-pad conv is exactly a GEMM over the existing layout.
@@ -364,6 +382,116 @@ Tensor opConv(
     }
   }
   return Tensor.float(out, [n, m, ...outSp]);
+}
+
+/// Pretransforms `[M,C,3,3]` kernels for Winograd F(2x2,3x3).
+List<Float32List> pretransformWinogradF2x2(Tensor w) {
+  final m = w.shape[0], c = w.shape[1], wf = w.f!;
+  const g = <List<double>>[
+    [1, 0, 0],
+    [0.5, 0.5, 0.5],
+    [0.5, -0.5, 0.5],
+    [0, 0, 1],
+  ];
+  final u = List.generate(16, (_) => Float32List(m * c));
+  for (int om = 0; om < m; om++) {
+    for (int ic = 0; ic < c; ic++) {
+      final base = (om * c + ic) * 9;
+      for (int y = 0; y < 4; y++) {
+        for (int x = 0; x < 4; x++) {
+          double sum = 0;
+          for (int ky = 0; ky < 3; ky++) {
+            for (int kx = 0; kx < 3; kx++) {
+              sum += g[y][ky] * wf[base + ky * 3 + kx] * g[x][kx];
+            }
+          }
+          u[y * 4 + x][om * c + ic] = sum;
+        }
+      }
+    }
+  }
+  return u;
+}
+
+Tensor _convWinogradF2x2(Float32List x, List<Float32List> u, Float32List? bias,
+    int n, int c, int m, int h, int w) {
+  final th = (h + 1) >> 1, tw = (w + 1) >> 1, tiles = th * tw;
+  final v = List.generate(16, (_) => Float32List(c * tiles));
+  final products = List.generate(16, (_) => Float32List(m * tiles));
+  final d = Float64List(16), tmp = Float64List(16);
+  final out = Float32List(n * m * h * w);
+  for (int b = 0; b < n; b++) {
+    for (final q in v) {
+      q.fillRange(0, q.length, 0);
+    }
+    for (int ic = 0; ic < c; ic++) {
+      final xb = (b * c + ic) * h * w;
+      for (int ty = 0; ty < th; ty++) {
+        for (int tx = 0; tx < tw; tx++) {
+          for (int iy = 0; iy < 4; iy++) {
+            final sy = ty * 2 + iy - 1;
+            for (int ix = 0; ix < 4; ix++) {
+              final sx = tx * 2 + ix - 1;
+              d[iy * 4 + ix] = sy >= 0 && sy < h && sx >= 0 && sx < w
+                  ? x[xb + sy * w + sx]
+                  : 0;
+            }
+          }
+          for (int r = 0; r < 4; r++) {
+            final o = r * 4;
+            tmp[o] = d[o] - d[o + 2];
+            tmp[o + 1] = d[o + 1] + d[o + 2];
+            tmp[o + 2] = -d[o + 1] + d[o + 2];
+            tmp[o + 3] = d[o + 1] - d[o + 3];
+          }
+          final tile = ty * tw + tx;
+          for (int col = 0; col < 4; col++) {
+            final a0 = tmp[col], a1 = tmp[4 + col];
+            final a2 = tmp[8 + col], a3 = tmp[12 + col];
+            v[col][ic * tiles + tile] = a0 - a2;
+            v[4 + col][ic * tiles + tile] = a1 + a2;
+            v[8 + col][ic * tiles + tile] = -a1 + a2;
+            v[12 + col][ic * tiles + tile] = a1 - a3;
+          }
+        }
+      }
+    }
+    for (int q = 0; q < 16; q++) {
+      products[q].fillRange(0, products[q].length, 0);
+      gemm.matmulKernel(u[q], 0, v[q], 0, products[q], 0, m, c, tiles);
+    }
+    for (int om = 0; om < m; om++) {
+      final ob = (b * m + om) * h * w;
+      for (int ty = 0; ty < th; ty++) {
+        for (int tx = 0; tx < tw; tx++) {
+          final tile = ty * tw + tx;
+          for (int col = 0; col < 4; col++) {
+            final a0 = products[col][om * tiles + tile];
+            final a1 = products[4 + col][om * tiles + tile];
+            final a2 = products[8 + col][om * tiles + tile];
+            final a3 = products[12 + col][om * tiles + tile];
+            tmp[col] = a0 + a1 + a2;
+            tmp[4 + col] = a1 - a2 - a3;
+          }
+          final oy = ty * 2, ox = tx * 2;
+          final b0 = bias == null ? 0.0 : bias[om];
+          if (oy < h && ox < w) {
+            out[ob + oy * w + ox] = tmp[0] + tmp[1] + tmp[2] + b0;
+          }
+          if (oy < h && ox + 1 < w) {
+            out[ob + oy * w + ox + 1] = tmp[1] - tmp[2] - tmp[3] + b0;
+          }
+          if (oy + 1 < h && ox < w) {
+            out[ob + (oy + 1) * w + ox] = tmp[4] + tmp[5] + tmp[6] + b0;
+          }
+          if (oy + 1 < h && ox + 1 < w) {
+            out[ob + (oy + 1) * w + ox + 1] = tmp[5] - tmp[6] - tmp[7] + b0;
+          }
+        }
+      }
+    }
+  }
+  return Tensor.float(out, [n, m, h, w]);
 }
 
 /// `ConvTranspose` — N-dimensional transposed convolution via output scatter:

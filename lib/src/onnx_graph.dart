@@ -58,6 +58,7 @@ class OnnxGraphExecutor {
   /// Per-node im2col scratch, grown for the largest shape seen and reused on
   /// later runs. Workspaces are executor-local and never escape as outputs.
   final Map<NodeProto, Float32List> _convWorkspaces = Map.identity();
+  final Map<NodeProto, List<Float32List>> _winogradWeights = Map.identity();
 
   /// Nodes remaining after load-time constant folding, in execution order.
   late final List<NodeProto> _nodes;
@@ -597,6 +598,26 @@ class OnnxGraphExecutor {
     final convToReplicate = <String, (Float32List, List<int>, Float32List?)>{};
     for (final node in _nodes) {
       if (node.opType == 'Conv' && !poolConv) continue;
+      if (node.opType == 'Conv' && poolConv) {
+        final w = node.input.length > 1 ? _initializers[node.input[1]] : null;
+        final a = _AttrMap(node.attribute, _ext);
+        final strides = a.getInts('strides');
+        final dilations = a.getInts('dilations');
+        final pads = a.getInts('pads');
+        if (w != null &&
+            w.isFloat &&
+            w.rank == 4 &&
+            w.shape[2] == 3 &&
+            w.shape[3] == 3 &&
+            (a.getInt('group') ?? 1) == 1 &&
+            (strides == null || strides.every((v) => v == 1)) &&
+            (dilations == null || dilations.every((v) => v == 1)) &&
+            pads != null &&
+            pads.length == 4 &&
+            pads.every((v) => v == 1)) {
+          continue; // local Winograd is faster and preserves run/runAsync parity
+        }
+      }
       if (node.opType == 'MatMul' && node.input.length >= 2) {
         final name = node.input[1];
         final t = _initializers[name];
@@ -1371,17 +1392,39 @@ class OnnxGraphExecutor {
         ];
       // --- convolution / pooling / normalization family ---
       case 'Conv':
+        final convW = need(1);
+        final convStrides = attrs.getInts('strides');
+        final convPads = attrs.getInts('pads');
+        final convDilations = attrs.getInts('dilations');
+        final useWinograd = need(0).rank == 4 &&
+            !(_pool?.convWeights.contains(node.input[1]) ?? false) &&
+            _initializers.containsKey(node.input[1]) &&
+            !_graph.input.any((input) => input.name == node.input[1]) &&
+            convW.isFloat &&
+            convW.rank == 4 &&
+            convW.shape[2] == 3 &&
+            convW.shape[3] == 3 &&
+            (attrs.getInt('group') ?? 1) == 1 &&
+            (convStrides == null || convStrides.every((v) => v == 1)) &&
+            (convDilations == null || convDilations.every((v) => v == 1)) &&
+            convPads != null &&
+            convPads.length == 4 &&
+            convPads.every((v) => v == 1);
         return [
           nn.opConv(
             need(0),
-            need(1),
+            convW,
             ins.length > 2 ? ins[2] : null,
-            strides: attrs.getInts('strides'),
-            pads: attrs.getInts('pads'),
-            dilations: attrs.getInts('dilations'),
+            strides: convStrides,
+            pads: convPads,
+            dilations: convDilations,
             group: attrs.getInt('group') ?? 1,
             autoPad: attrs.getString('auto_pad') ?? 'NOTSET',
             workspace: _convWorkspace(node, need(0), need(1), attrs),
+            winogradWeights: useWinograd
+                ? _winogradWeights.putIfAbsent(
+                    node, () => nn.pretransformWinogradF2x2(convW))
+                : null,
           )
         ];
       case 'ConvTranspose':

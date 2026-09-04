@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.10.5
+
+- **Winograd 3x3 convolution.** Eligible float NCHW convolutions with static
+  weights, stride/dilation 1, and one-cell padding use F(2x2,3x3) with weights
+  transformed once per graph. On the 8x8 Maia/Lc0 CNN this reduced mean
+  inference time from 33.2 ms to 27.8 ms (~16%) in alternating trials.
+- Winograd/direct-convolution parity is covered across even and odd spatial
+  sizes and multiple batches. Convolutions assigned to the isolate pool retain
+  the existing im2col path so synchronous and asynchronous results stay
+  bitwise-identical.
+
 ## 0.10.4
 
 - **Fast CNN global-average pooling.** `ReduceMean` now recognizes any
