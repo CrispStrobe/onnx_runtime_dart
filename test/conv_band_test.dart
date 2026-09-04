@@ -33,7 +33,7 @@ void main() {
       final bias = _rand([4]);
       final reference = nn.opConv(x, w, bias, pads: [1, 1, 1, 1]);
       final actual = nn.opConv(x, w, bias,
-          pads: [1, 1, 1, 1], winogradWeights: nn.pretransformWinogradF2x2(w));
+          pads: [1, 1, 1, 1], winogradPlan: nn.pretransformWinogradF2x2(w));
       expect(actual.shape, reference.shape);
       for (int i = 0; i < actual.length; i++) {
         expect(actual.getD(i), closeTo(reference.getD(i), 2e-5),

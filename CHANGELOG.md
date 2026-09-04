@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.10.6
+
+- **Reusable Winograd scratch.** Input transforms and transformed products are
+  retained per convolution node instead of allocating 32 typed arrays on every
+  call. Maia/Lc0 avoids roughly 2 MB of transient scratch per evaluation; mixed
+  forward/reverse paired trials measured about 8% lower mean inference time.
+
 ## 0.10.5
 
 - **Winograd 3x3 convolution.** Eligible float NCHW convolutions with static

@@ -58,7 +58,7 @@ class OnnxGraphExecutor {
   /// Per-node im2col scratch, grown for the largest shape seen and reused on
   /// later runs. Workspaces are executor-local and never escape as outputs.
   final Map<NodeProto, Float32List> _convWorkspaces = Map.identity();
-  final Map<NodeProto, List<Float32List>> _winogradWeights = Map.identity();
+  final Map<NodeProto, nn.WinogradF2x2Plan> _winogradPlans = Map.identity();
 
   /// Nodes remaining after load-time constant folding, in execution order.
   late final List<NodeProto> _nodes;
@@ -1421,8 +1421,8 @@ class OnnxGraphExecutor {
             group: attrs.getInt('group') ?? 1,
             autoPad: attrs.getString('auto_pad') ?? 'NOTSET',
             workspace: _convWorkspace(node, need(0), need(1), attrs),
-            winogradWeights: useWinograd
-                ? _winogradWeights.putIfAbsent(
+            winogradPlan: useWinograd
+                ? _winogradPlans.putIfAbsent(
                     node, () => nn.pretransformWinogradF2x2(convW))
                 : null,
           )

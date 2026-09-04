@@ -113,7 +113,7 @@ Tensor opConv(
   int? bandStart,
   int? bandEnd,
   Float32List? workspace,
-  List<Float32List>? winogradWeights,
+  WinogradF2x2Plan? winogradPlan,
 }) {
   final nd = x.rank - 2;
   assert(
@@ -173,7 +173,7 @@ Tensor opConv(
     // m=1 matmuls where packing dominates — the direct loop wins.
     final depthwise = cPerGroup == 1 && mPerGroup == 1;
 
-    if (winogradWeights != null &&
+    if (winogradPlan != null &&
         group == 1 &&
         kh == 3 &&
         kw == 3 &&
@@ -187,7 +187,7 @@ Tensor opConv(
         p[3] == 1 &&
         bandStart == null &&
         bandEnd == null) {
-      return _convWinogradF2x2(xf, winogradWeights, bf, n, cIn, m, h, wd);
+      return _convWinogradF2x2(xf, winogradPlan, bf, n, cIn, m, h, wd);
     }
 
     if (!depthwise) {
@@ -384,8 +384,26 @@ Tensor opConv(
   return Tensor.float(out, [n, m, ...outSp]);
 }
 
+class WinogradF2x2Plan {
+  final List<Float32List> weights;
+  List<Float32List>? _inputTransforms;
+  List<Float32List>? _products;
+  int _tiles = 0;
+
+  WinogradF2x2Plan(this.weights);
+
+  (List<Float32List>, List<Float32List>) scratch(int c, int m, int tiles) {
+    if (_inputTransforms == null || _tiles < tiles) {
+      _tiles = tiles;
+      _inputTransforms = List.generate(16, (_) => Float32List(c * _tiles));
+      _products = List.generate(16, (_) => Float32List(m * _tiles));
+    }
+    return (_inputTransforms!, _products!);
+  }
+}
+
 /// Pretransforms `[M,C,3,3]` kernels for Winograd F(2x2,3x3).
-List<Float32List> pretransformWinogradF2x2(Tensor w) {
+WinogradF2x2Plan pretransformWinogradF2x2(Tensor w) {
   final m = w.shape[0], c = w.shape[1], wf = w.f!;
   const g = <List<double>>[
     [1, 0, 0],
@@ -410,14 +428,14 @@ List<Float32List> pretransformWinogradF2x2(Tensor w) {
       }
     }
   }
-  return u;
+  return WinogradF2x2Plan(u);
 }
 
-Tensor _convWinogradF2x2(Float32List x, List<Float32List> u, Float32List? bias,
-    int n, int c, int m, int h, int w) {
+Tensor _convWinogradF2x2(Float32List x, WinogradF2x2Plan plan,
+    Float32List? bias, int n, int c, int m, int h, int w) {
   final th = (h + 1) >> 1, tw = (w + 1) >> 1, tiles = th * tw;
-  final v = List.generate(16, (_) => Float32List(c * tiles));
-  final products = List.generate(16, (_) => Float32List(m * tiles));
+  final (v, products) = plan.scratch(c, m, tiles);
+  final u = plan.weights;
   final d = Float64List(16), tmp = Float64List(16);
   final out = Float32List(n * m * h * w);
   for (int b = 0; b < n; b++) {
