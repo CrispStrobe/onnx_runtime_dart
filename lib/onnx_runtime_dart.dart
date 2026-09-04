@@ -34,7 +34,8 @@ export 'src/bpe_tokenizer.dart' show BpeTokenizer;
 export 'src/wordpiece_tokenizer.dart' show WordPieceTokenizer;
 export 'src/unigram_tokenizer.dart' show UnigramTokenizer;
 export 'src/token_template.dart' show TruncationDirection, TruncationStrategy;
-export 'src/onnx_graph.dart' show OnnxGraphExecutor, ExecutionProfile;
+export 'src/onnx_graph.dart'
+    show OnnxGraphExecutor, ExecutionProfile, OnnxExperiment;
 export 'src/onnx_ops.dart' show OnnxRandomInject;
 export 'src/onnx_proto_loader.dart' show ExternalDataResolver;
 
@@ -65,7 +66,8 @@ class OnnxModel {
   factory OnnxModel.fromBytes(Uint8List bytes,
       {ExternalDataResolver? externalData,
       bool fuse = true,
-      bool lastTokenLogits = false}) {
+      bool lastTokenLogits = false,
+      Set<OnnxExperiment> experiments = const {}}) {
     // ModelProto.fromBuffer parses untrusted bytes. Malformed data surfaces
     // either as the protobuf decoder's own InvalidProtocolBufferException or,
     // for a corrupt length-delimited field, as a leaked RangeError from
@@ -84,7 +86,8 @@ class OnnxModel {
     return OnnxModel._(OnnxGraphExecutor(proto,
         externalData: externalData,
         fuse: fuse,
-        lastTokenLogits: lastTokenLogits));
+        lastTokenLogits: lastTokenLogits,
+        experiments: experiments));
   }
 
   /// The graph inputs a caller must feed (excluding those with initializer

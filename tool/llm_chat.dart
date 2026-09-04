@@ -44,8 +44,8 @@ void main(List<String> args) {
 
   // Discover the decoder's cache shape from the graph inputs.
   final pastKeys = model.inputSpecs
-      .where((s) => s.name.startsWith('past_key_values') &&
-          s.name.endsWith('.key'))
+      .where((s) =>
+          s.name.startsWith('past_key_values') && s.name.endsWith('.key'))
       .toList();
   final nLayers = pastKeys.length;
   if (nLayers == 0) {

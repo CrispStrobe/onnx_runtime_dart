@@ -386,12 +386,13 @@ Tensor opConv(
 
 class WinogradF2x2Plan {
   final List<Float32List> weights;
+  final bool narrowDirectGemm;
   List<Float32List>? _inputTransforms;
   List<Float32List>? _products;
   Float32List? _paddedInput;
   int _tiles = 0;
 
-  WinogradF2x2Plan(this.weights);
+  WinogradF2x2Plan(this.weights, {this.narrowDirectGemm = false});
 
   (List<Float32List>, List<Float32List>) scratch(int c, int m, int tiles) {
     if (_inputTransforms == null || _tiles < tiles) {
@@ -414,7 +415,8 @@ class WinogradF2x2Plan {
 }
 
 /// Pretransforms `[M,C,3,3]` kernels for Winograd F(2x2,3x3).
-WinogradF2x2Plan pretransformWinogradF2x2(Tensor w) {
+WinogradF2x2Plan pretransformWinogradF2x2(Tensor w,
+    {bool narrowDirectGemm = false}) {
   final m = w.shape[0], c = w.shape[1], wf = w.f!;
   const g = <List<double>>[
     [1, 0, 0],
@@ -439,7 +441,7 @@ WinogradF2x2Plan pretransformWinogradF2x2(Tensor w) {
       }
     }
   }
-  return WinogradF2x2Plan(u);
+  return WinogradF2x2Plan(u, narrowDirectGemm: narrowDirectGemm);
 }
 
 Tensor _convWinogradF2x2(Float32List x, WinogradF2x2Plan plan,
@@ -491,7 +493,8 @@ Tensor _convWinogradF2x2(Float32List x, WinogradF2x2Plan plan,
     }
     for (int q = 0; q < 16; q++) {
       products[q].fillRange(0, products[q].length, 0);
-      gemm.matmulKernel(u[q], 0, v[q], 0, products[q], 0, m, c, tiles);
+      gemm.matmulKernel(u[q], 0, v[q], 0, products[q], 0, m, c, tiles,
+          narrowDirect: plan.narrowDirectGemm);
     }
     for (int om = 0; om < m; om++) {
       final ob = (b * m + om) * h * w;

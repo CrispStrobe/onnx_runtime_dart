@@ -25,7 +25,8 @@ const int _panelBytes = 192 * 1024;
 /// Computes `out[m×n] += a[m×k] · b[k×n]` (row-major, at the given flat
 /// offsets). `out` is assumed zero-initialized (fresh allocation).
 void matmulKernel(Float32List a, int aOff, Float32List b, int bOff,
-    Float32List out, int outOff, int m, int k, int n) {
+    Float32List out, int outOff, int m, int k, int n,
+    {bool narrowDirect = false}) {
   // Single-row GEMV (LLM decode: batch·seq == 1). The register-tiled path
   // below packs a column panel of B before computing — worthwhile when many
   // A-rows reuse it, but for one row that packing is pure overhead (B is read
@@ -33,6 +34,15 @@ void matmulKernel(Float32List a, int aOff, Float32List b, int bOff,
   // column tiles instead. Same k-order accumulation ⇒ bitwise identical.
   if (m == 1) {
     _gemv(a, aOff, b, bOff, out, outOff, k, n);
+    return;
+  }
+  final bBaseBytes = b.offsetInBytes + bOff * 4;
+  if (narrowDirect &&
+      m >= 4 &&
+      n <= 32 &&
+      (n & 3) == 0 &&
+      (bBaseBytes & 15) == 0) {
+    _matmulNarrowAligned(a, aOff, b, bBaseBytes, out, outOff, m, k, n);
     return;
   }
   // Column-panel width: as many columns as keep k×panel×4 bytes under the
@@ -166,6 +176,53 @@ void matmulKernel(Float32List a, int aOff, Float32List b, int bOff,
       }
     }
   }
+}
+
+void _matmulNarrowAligned(Float32List a, int aOff, Float32List b,
+    int bBaseBytes, Float32List out, int outOff, int m, int k, int n) {
+  final n4 = n >> 2;
+  final b4 = Float32x4List.view(b.buffer, bBaseBytes, k * n4);
+  int i = 0;
+  for (; i + 4 <= m; i += 4) {
+    final a0 = aOff + i * k, a1 = a0 + k, a2 = a1 + k, a3 = a2 + k;
+    final o0 = outOff + i * n, o1 = o0 + n, o2 = o1 + n, o3 = o2 + n;
+    for (int j = 0; j < n4; j++) {
+      var c0 = Float32x4.zero(), c1 = Float32x4.zero();
+      var c2 = Float32x4.zero(), c3 = Float32x4.zero();
+      int br = j;
+      for (int kk = 0; kk < k; kk++) {
+        final bv = b4[br];
+        br += n4;
+        c0 += Float32x4.splat(a[a0 + kk]) * bv;
+        c1 += Float32x4.splat(a[a1 + kk]) * bv;
+        c2 += Float32x4.splat(a[a2 + kk]) * bv;
+        c3 += Float32x4.splat(a[a3 + kk]) * bv;
+      }
+      _store4(out, o0 + (j << 2), c0);
+      _store4(out, o1 + (j << 2), c1);
+      _store4(out, o2 + (j << 2), c2);
+      _store4(out, o3 + (j << 2), c3);
+    }
+  }
+  for (; i < m; i++) {
+    final ar = aOff + i * k, or = outOff + i * n;
+    for (int j = 0; j < n4; j++) {
+      var sum = Float32x4.zero();
+      int br = j;
+      for (int kk = 0; kk < k; kk++) {
+        sum += Float32x4.splat(a[ar + kk]) * b4[br];
+        br += n4;
+      }
+      _store4(out, or + (j << 2), sum);
+    }
+  }
+}
+
+void _store4(Float32List out, int offset, Float32x4 value) {
+  out[offset] = value.x;
+  out[offset + 1] = value.y;
+  out[offset + 2] = value.z;
+  out[offset + 3] = value.w;
 }
 
 /// `out[1×n] = a[1×k] · b[k×n]`, streaming B exactly once. Columns are

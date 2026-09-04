@@ -19,7 +19,8 @@ Future<void> main(List<String> args) async {
   final wk = args.indexOf('--workers');
   final workers = wk >= 0 ? int.parse(args[wk + 1]) : 0;
   if (workers > 0) await model.parallelize(workers: workers);
-  final ref = jsonDecode(File(args[1]).readAsStringSync()) as Map<String, dynamic>;
+  final ref =
+      jsonDecode(File(args[1]).readAsStringSync()) as Map<String, dynamic>;
   final prompt = (ref['prompt'] as List).cast<int>();
   final nNew = ref['n_new'] as int;
   final nLayers = ref['n_layers'] as int;
@@ -29,8 +30,7 @@ Future<void> main(List<String> args) async {
 
   // past cache: name -> [1, kvHeads, len, headSize], starts empty.
   final past = <String, Tensor>{};
-  Tensor emptyPast() =>
-      Tensor.float(Float32List(0), [1, kvHeads, 0, headSize]);
+  Tensor emptyPast() => Tensor.float(Float32List(0), [1, kvHeads, 0, headSize]);
   for (var l = 0; l < nLayers; l++) {
     past['past_key_values.$l.key'] = emptyPast();
     past['past_key_values.$l.value'] = emptyPast();
@@ -48,11 +48,10 @@ Future<void> main(List<String> args) async {
   for (var step = 0; step < nNew; step++) {
     final seq = cur.length;
     final inputs = <String, Tensor>{
-      'input_ids':
-          Tensor.int64(Int64List.fromList(cur), [1, seq]),
-      'attention_mask':
-          Tensor.int64(Int64List(total + seq)..fillRange(0, total + seq, 1),
-              [1, total + seq]),
+      'input_ids': Tensor.int64(Int64List.fromList(cur), [1, seq]),
+      'attention_mask': Tensor.int64(
+          Int64List(total + seq)..fillRange(0, total + seq, 1),
+          [1, total + seq]),
       'position_ids': Tensor.int64(
           Int64List.fromList([for (var i = 0; i < seq; i++) total + i]),
           [1, seq]),

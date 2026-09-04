@@ -46,9 +46,19 @@ class ExecutionProfile {
   }
 }
 
+/// Disabled-by-default execution strategies intended for hardware A/B tests.
+enum OnnxExperiment {
+  inPlaceRelu,
+  inPlaceAddRelu,
+  cacheAttributes,
+  narrowDirectGemm,
+}
+
 class OnnxGraphExecutor {
   final GraphProto _graph;
   final Map<String, Tensor> _initializers = {};
+  final Set<OnnxExperiment> experiments;
+  final Map<NodeProto, _AttrMap> _attributeMaps = Map.identity();
 
   /// Transposed copies of initializer weights fed to `Gemm` with `transB=1`,
   /// built once on first use (ORT-style weight prepacking) — otherwise every
@@ -85,9 +95,11 @@ class OnnxGraphExecutor {
   OnnxGraphExecutor(ModelProto model,
       {ExternalDataResolver? externalData,
       bool fuse = true,
-      bool lastTokenLogits = false})
+      bool lastTokenLogits = false,
+      Set<OnnxExperiment> experiments = const {}})
       : _graph = model.graph,
-        _ext = externalData {
+        _ext = externalData,
+        experiments = Set.unmodifiable(experiments) {
     _opset = model.opsetImport
         .where((o) => o.domain.isEmpty)
         .map((o) => o.version.toInt())
@@ -100,6 +112,14 @@ class OnnxGraphExecutor {
     var nodes = fuse ? _fusePatterns(folded) : folded;
     if (lastTokenLogits) nodes = _sliceLogitsToLastToken(nodes);
     _nodes = nodes;
+  }
+
+  _AttrMap _attrsFor(NodeProto node) {
+    if (!experiments.contains(OnnxExperiment.cacheAttributes)) {
+      return _AttrMap(node.attribute, _ext);
+    }
+    return _attributeMaps.putIfAbsent(
+        node, () => _AttrMap(node.attribute, _ext, true));
   }
 
   /// The graph inputs a caller must feed (graph inputs that aren't also
@@ -196,6 +216,24 @@ class OnnxGraphExecutor {
     final removed = <NodeProto>{};
     final replaceAt = <NodeProto, NodeProto>{}; // pattern tail -> fused node
 
+    if (experiments.contains(OnnxExperiment.inPlaceRelu)) {
+      for (final relu in nodes) {
+        if (relu.opType != 'Relu' || relu.input.length != 1) continue;
+        final name = relu.input[0];
+        final i = producerIdx[name];
+        if (i == null || uses[name] != 1) continue;
+        if (!const {'Conv', 'Add', 'Sub', 'Mul', 'Div'}
+            .contains(nodes[i].opType)) {
+          continue;
+        }
+        replaceAt[relu] = NodeProto()
+          ..opType = '_ExperimentalReluInPlace'
+          ..name = 'in_place_relu_${relu.output[0]}'
+          ..input.add(name)
+          ..output.addAll(relu.output);
+      }
+    }
+
     // Residual CNN blocks conventionally end in Add(skip, branch) -> Relu.
     // Combining them avoids materializing and then rereading the full Add
     // output. Keep the ordinary nodes when the intermediate is observed by
@@ -204,11 +242,30 @@ class OnnxGraphExecutor {
       if (add.opType != 'Add' || add.input.length != 2) continue;
       final relu = soleConsumer(add.output[0]);
       if (relu == null || relu.opType != 'Relu') continue;
+      var inputs = add.input.toList();
+      var inPlace = false;
+      if (experiments.contains(OnnxExperiment.inPlaceAddRelu)) {
+        final reusable = inputs.indexWhere((name) {
+          final i = producerIdx[name];
+          return i != null &&
+              uses[name] == 1 &&
+              const {'Conv', 'Add', 'Sub', 'Mul', 'Div'}
+                  .contains(nodes[i].opType);
+        });
+        if (reusable >= 0) {
+          inPlace = true;
+          if (reusable > 0) {
+            final first = inputs[0];
+            inputs[0] = inputs[reusable];
+            inputs[reusable] = first;
+          }
+        }
+      }
       removed.add(add);
       replaceAt[relu] = NodeProto()
-        ..opType = '_FusedAddRelu'
+        ..opType = inPlace ? '_ExperimentalAddReluInPlace' : '_FusedAddRelu'
         ..name = 'fused_add_relu_${relu.output[0]}'
-        ..input.addAll(add.input)
+        ..input.addAll(inputs)
         ..output.addAll(relu.output);
     }
 
@@ -515,7 +572,7 @@ class OnnxGraphExecutor {
         final ins = [
           for (final s in node.input) s.isEmpty ? null : _initializers[s]
         ];
-        outs = _dispatch(node, ins, _AttrMap(node.attribute, _ext));
+        outs = _dispatch(node, ins, _attrsFor(node));
       } catch (_) {
         kept.add(node); // unsupported/failed op: leave it for run time
         continue;
@@ -600,7 +657,7 @@ class OnnxGraphExecutor {
       if (node.opType == 'Conv' && !poolConv) continue;
       if (node.opType == 'Conv' && poolConv) {
         final w = node.input.length > 1 ? _initializers[node.input[1]] : null;
-        final a = _AttrMap(node.attribute, _ext);
+        final a = _attrsFor(node);
         final strides = a.getInts('strides');
         final dilations = a.getInts('dilations');
         final pads = a.getInts('pads');
@@ -632,8 +689,7 @@ class OnnxGraphExecutor {
         final t = _initializers[name];
         if (t == null || !t.isFloat || t.rank != 2) continue;
         if (t.length < minWeightElements) continue;
-        final transB =
-            (_AttrMap(node.attribute, _ext).getInt('transB') ?? 0) != 0;
+        final transB = (_attrsFor(node).getInt('transB') ?? 0) != 0;
         final b = transB ? ops.opTranspose(t, [1, 0]) : t;
         toPartition['gemm:$name'] = (b.f!, b.shape[0], b.shape[1]);
       } else if (node.opType == 'Conv' && node.input.length >= 2) {
@@ -673,7 +729,7 @@ class OnnxGraphExecutor {
     final pool = _pool;
 
     for (final node in _nodes) {
-      final attrs = _AttrMap(node.attribute, _ext);
+      final attrs = _attrsFor(node);
       final ins = [
         for (final name in node.input) name.isEmpty ? null : values[name]
       ];
@@ -806,7 +862,7 @@ class OnnxGraphExecutor {
       ExecutionProfile? profile) {
     final sw = profile == null ? null : Stopwatch();
     for (final node in nodes) {
-      final attrs = _AttrMap(node.attribute, _ext);
+      final attrs = _attrsFor(node);
       final ins = [
         for (final name in node.input) name.isEmpty ? null : values[name]
       ];
@@ -1035,6 +1091,10 @@ class OnnxGraphExecutor {
         return [ops.opGelu(need(0))];
       case '_FusedAddRelu':
         return [ops.opAddRelu(need(0), need(1))];
+      case '_ExperimentalReluInPlace':
+        return [ops.opReluInPlace(need(0))];
+      case '_ExperimentalAddReluInPlace':
+        return [ops.opAddReluInPlace(need(0), need(1))];
       case '_FusedGlu':
         return [ops.opGlu(need(0), attrs.getInt('axis') ?? 0)];
       case '_FusedRMSNorm':
@@ -1423,7 +1483,10 @@ class OnnxGraphExecutor {
             workspace: _convWorkspace(node, need(0), need(1), attrs),
             winogradPlan: useWinograd
                 ? _winogradPlans.putIfAbsent(
-                    node, () => nn.pretransformWinogradF2x2(convW))
+                    node,
+                    () => nn.pretransformWinogradF2x2(convW,
+                        narrowDirectGemm: experiments
+                            .contains(OnnxExperiment.narrowDirectGemm)))
                 : null,
           )
         ];
@@ -1776,23 +1839,51 @@ class OnnxGraphExecutor {
 class _AttrMap {
   final Map<String, AttributeProto> _byName;
   final ExternalDataResolver? _ext;
-  _AttrMap(Iterable<AttributeProto> attrs, [this._ext])
+  final bool cacheDecoded;
+  final Map<String, String> _stringCache = {};
+  final Map<String, List<int>> _intsCache = {};
+  final Map<String, List<double>> _floatsCache = {};
+  final Map<String, List<String>> _stringsCache = {};
+  _AttrMap(Iterable<AttributeProto> attrs,
+      [this._ext, this.cacheDecoded = false])
       : _byName = {for (final a in attrs) a.name: a};
 
   int? getInt(String name) =>
       _byName.containsKey(name) ? _byName[name]!.i.toInt() : null;
   double? getFloat(String name) =>
       _byName.containsKey(name) ? _byName[name]!.f : null;
-  String? getString(String name) =>
-      _byName.containsKey(name) ? String.fromCharCodes(_byName[name]!.s) : null;
-  List<int>? getInts(String name) => _byName.containsKey(name)
-      ? _byName[name]!.ints.map((v) => v.toInt()).toList()
-      : null;
-  List<double>? getFloats(String name) =>
-      _byName.containsKey(name) ? _byName[name]!.floats.toList() : null;
-  List<String>? getStrings(String name) => _byName.containsKey(name)
-      ? _byName[name]!.strings.map((s) => String.fromCharCodes(s)).toList()
-      : null;
+  String? getString(String name) {
+    final attr = _byName[name];
+    if (attr == null) return null;
+    if (!cacheDecoded) return String.fromCharCodes(attr.s);
+    return _stringCache.putIfAbsent(name, () => String.fromCharCodes(attr.s));
+  }
+
+  List<int>? getInts(String name) {
+    final attr = _byName[name];
+    if (attr == null) return null;
+    if (!cacheDecoded) return attr.ints.map((v) => v.toInt()).toList();
+    return _intsCache.putIfAbsent(
+        name, () => attr.ints.map((v) => v.toInt()).toList());
+  }
+
+  List<double>? getFloats(String name) {
+    final attr = _byName[name];
+    if (attr == null) return null;
+    if (!cacheDecoded) return attr.floats.toList();
+    return _floatsCache.putIfAbsent(name, () => attr.floats.toList());
+  }
+
+  List<String>? getStrings(String name) {
+    final attr = _byName[name];
+    if (attr == null) return null;
+    if (!cacheDecoded) {
+      return attr.strings.map((s) => String.fromCharCodes(s)).toList();
+    }
+    return _stringsCache.putIfAbsent(
+        name, () => attr.strings.map((s) => String.fromCharCodes(s)).toList());
+  }
+
   GraphProto? getGraph(String name) =>
       _byName.containsKey(name) ? _byName[name]!.g : null;
 

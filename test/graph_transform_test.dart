@@ -164,6 +164,74 @@ void main() {
       expect(profile.callsByOp, {'Add': 1, 'Relu': 1});
     });
 
+    test('experimental in-place Relu is opt-in and preserves results', () {
+      final graph = GraphProto()
+        ..input.addAll([
+          ValueInfoProto()..name = 'A',
+          ValueInfoProto()..name = 'B',
+        ])
+        ..output.add(ValueInfoProto()..name = 'Y')
+        ..node.addAll([
+          NodeProto()
+            ..opType = 'Sub'
+            ..input.addAll(['A', 'B'])
+            ..output.add('difference'),
+          NodeProto()
+            ..opType = 'Relu'
+            ..input.add('difference')
+            ..output.add('Y'),
+        ]);
+      final model = OnnxModel.fromBytes(
+          (ModelProto()..graph = graph).writeToBuffer(),
+          experiments: {OnnxExperiment.inPlaceRelu});
+      final profile = ExecutionProfile();
+      final y = model.run({
+        'A': Tensor.float(Float32List.fromList([-3, 4]), [2]),
+        'B': Tensor.float(Float32List.fromList([-5, 6]), [2]),
+      }, [
+        'Y'
+      ], profile: profile)['Y']!;
+      expect(y.asFloatList(), [2.0, 0.0]);
+      expect(profile.callsByOp, {'Sub': 1, '_ExperimentalReluInPlace': 1});
+    });
+
+    test('experimental in-place Add-Relu is opt-in and preserves results', () {
+      final graph = GraphProto()
+        ..input.addAll([
+          ValueInfoProto()..name = 'A',
+          ValueInfoProto()..name = 'B',
+          ValueInfoProto()..name = 'C',
+        ])
+        ..output.add(ValueInfoProto()..name = 'Y')
+        ..node.addAll([
+          NodeProto()
+            ..opType = 'Add'
+            ..input.addAll(['A', 'B'])
+            ..output.add('branch'),
+          NodeProto()
+            ..opType = 'Add'
+            ..input.addAll(['C', 'branch'])
+            ..output.add('sum'),
+          NodeProto()
+            ..opType = 'Relu'
+            ..input.add('sum')
+            ..output.add('Y'),
+        ]);
+      final model = OnnxModel.fromBytes(
+          (ModelProto()..graph = graph).writeToBuffer(),
+          experiments: {OnnxExperiment.inPlaceAddRelu});
+      final profile = ExecutionProfile();
+      final y = model.run({
+        'A': Tensor.float(Float32List.fromList([-3, 4]), [2]),
+        'B': Tensor.float(Float32List.fromList([1, -2]), [2]),
+        'C': Tensor.float(Float32List.fromList([5, -7]), [2]),
+      }, [
+        'Y'
+      ], profile: profile)['Y']!;
+      expect(y.asFloatList(), [3.0, 0.0]);
+      expect(profile.callsByOp, {'Add': 1, '_ExperimentalAddReluInPlace': 1});
+    });
+
     GraphProto geluGraph({bool leakIntermediate = false}) {
       final g = GraphProto()
         ..input.add(ValueInfoProto()..name = 'X')

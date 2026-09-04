@@ -24,7 +24,9 @@ void main(List<String> args) {
     } else {
       fail++;
       stderr.writeln('MISMATCH for ${jsonEncode(text)}');
-      if (!ok) stderr.writeln('  ids want ${want.length}: $want\n  ids got  ${got.length}: $got');
+      if (!ok)
+        stderr.writeln(
+            '  ids want ${want.length}: $want\n  ids got  ${got.length}: $got');
       if (!roundOk) stderr.writeln('  decode: ${jsonEncode(round)}');
     }
   }

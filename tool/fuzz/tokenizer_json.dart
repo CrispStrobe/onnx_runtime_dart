@@ -20,7 +20,11 @@ void main() {
 
   var worst = 0;
   for (final spec in [
-    ('WordPiece.fromJson', wpSeed, (String s) => WordPieceTokenizer.fromJson(s)),
+    (
+      'WordPiece.fromJson',
+      wpSeed,
+      (String s) => WordPieceTokenizer.fromJson(s)
+    ),
     ('Unigram.fromJson', uniSeed, (String s) => UnigramTokenizer.fromJson(s)),
     ('BPE.fromJson', uniSeed, (String s) => BpeTokenizer.fromJson(s)),
   ]) {
@@ -36,9 +40,8 @@ void main() {
       stressors: ['', '{}', '{"model":{}}', '[]', 'null', '{"model":null}'],
     );
     report.report();
-    final code = report.escapes.isNotEmpty
-        ? 1
-        : (report.maxSingleMs > 3000 ? 2 : 0);
+    final code =
+        report.escapes.isNotEmpty ? 1 : (report.maxSingleMs > 3000 ? 2 : 0);
     if (code > worst) worst = code;
   }
   exit(worst);

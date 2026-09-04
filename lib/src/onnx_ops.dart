@@ -420,6 +420,18 @@ Tensor opAddRelu(Tensor a, Tensor b) {
   return opRelu(sum);
 }
 
+Tensor opAddReluInPlace(Tensor target, Tensor other) {
+  final tf = target.f, of = other.f;
+  if (tf == null || of == null || !_shapeEq(target.shape, other.shape)) {
+    return opAddRelu(target, other);
+  }
+  for (int k = 0; k < tf.length; k++) {
+    final v = tf[k] + of[k];
+    tf[k] = v < 0.0 ? 0.0 : v;
+  }
+  return target;
+}
+
 Tensor opSub(Tensor a, Tensor b) =>
     _arithFloatFast(a, b, _Arith.sub) ??
     _elementwiseBinary(a, b, (x, y) => x - y);
@@ -513,6 +525,15 @@ Tensor opRelu(Tensor a) {
     out[k] = v < 0 ? 0.0 : v;
   }
   return Tensor.float(out, a.shape);
+}
+
+Tensor opReluInPlace(Tensor a) {
+  final af = a.f;
+  if (af == null) return opRelu(a);
+  for (int k = 0; k < af.length; k++) {
+    if (af[k] < 0.0) af[k] = 0.0;
+  }
+  return a;
 }
 
 Tensor opLeakyRelu(Tensor a, double alpha) =>

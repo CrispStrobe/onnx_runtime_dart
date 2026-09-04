@@ -215,6 +215,26 @@ void main() {
 On the web (no `dart:io`), use `OnnxModel.fromBytes(bytes)` directly; for
 external-data models pass an `externalData` resolver.
 
+### Hardware A/B experiments
+
+Strategies that improved some machines but regressed others are retained as
+disabled-by-default, per-model experiments:
+
+```dart
+final model = loadOnnxModel('model.onnx', experiments: {
+  OnnxExperiment.inPlaceRelu,
+  OnnxExperiment.inPlaceAddRelu,
+  OnnxExperiment.cacheAttributes,
+  OnnxExperiment.narrowDirectGemm,
+});
+```
+
+They are composable so benchmark them individually and together. The benchmark
+tool accepts the same enum names, for example
+`dart run tool/bench.dart model.onnx --iters 100 --experiments narrowDirectGemm`.
+These pure-Dart paths execute on the CPU; a GPU comparison requires a native or
+web runtime with an actual GPU execution provider.
+
 Weights load from float32, float16, float64, int32, int64, bool, and int8 /
 uint8 (kept in compact 1-byte storage) tensors, plus 4-bit block-quantized
 `MatMulNBits` weights (kept packed) — inline or from a companion `.onnx.data`

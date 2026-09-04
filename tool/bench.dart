@@ -1,6 +1,7 @@
 /// Wall-clock + per-op benchmark for a real model.
 ///
 ///   dart run tool/bench.dart model.onnx [--seq N] [--iters N] [--workers N]
+///       [--experiments inPlaceRelu,inPlaceAddRelu,cacheAttributes,narrowDirectGemm]
 ///
 /// With --workers the model runs through the isolate pool (`runAsync`).
 library;
@@ -26,11 +27,19 @@ Future<void> main(List<String> args) async {
   final seq = flag('seq', 16);
   final iters = flag('iters', 5);
   final workers = flag('workers', 0);
+  final experimentArg = flagString(args, 'experiments');
+  final experiments = experimentArg == null || experimentArg.isEmpty
+      ? <OnnxExperiment>{}
+      : experimentArg
+          .split(',')
+          .map((name) =>
+              OnnxExperiment.values.firstWhere((value) => value.name == name))
+          .toSet();
 
   final meta = ModelProto.fromBuffer(
       Uint8List.fromList(File(modelPath).readAsBytesSync()));
   final initNames = meta.graph.initializer.map((t) => t.name).toSet();
-  final model = loadOnnxModel(modelPath);
+  final model = loadOnnxModel(modelPath, experiments: experiments);
   final outName = meta.graph.output.first.name;
 
   final feed = <String, Tensor>{};
@@ -77,10 +86,9 @@ Future<void> main(List<String> args) async {
     await model.parallelize(
         workers: workers, poolConv: args.contains('--poolconv'));
   }
-  Future<Map<String, Tensor>> once({ExecutionProfile? profile}) =>
-      workers > 0
-          ? model.runAsync(feed, [outName], profile: profile)
-          : Future.value(model.run(feed, [outName], profile: profile));
+  Future<Map<String, Tensor>> once({ExecutionProfile? profile}) => workers > 0
+      ? model.runAsync(feed, [outName], profile: profile)
+      : Future.value(model.run(feed, [outName], profile: profile));
 
   // Warmup (JIT + any lazy decode), then timed iterations.
   await once();
@@ -102,4 +110,9 @@ Future<void> main(List<String> args) async {
       'mean=${(mean / 1000).toStringAsFixed(1)}ms over ${times.length} iters '
       '(seq=$seq${workers > 0 ? ', workers=$workers' : ''})');
   print(profile.report());
+}
+
+String? flagString(List<String> args, String name) {
+  final k = args.indexOf('--$name');
+  return k >= 0 && k + 1 < args.length ? args[k + 1] : null;
 }

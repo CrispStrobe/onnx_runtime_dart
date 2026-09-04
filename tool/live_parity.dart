@@ -35,7 +35,8 @@ Tensor tensorFromJson(Map<String, dynamic> j) {
 
 Future<void> main(List<String> args) async {
   final model = loadOnnxModel(args[0]);
-  final j = jsonDecode(File(args[1]).readAsStringSync()) as Map<String, dynamic>;
+  final j =
+      jsonDecode(File(args[1]).readAsStringSync()) as Map<String, dynamic>;
   final inputs = (j['inputs'] as Map<String, dynamic>)
       .map((k, v) => MapEntry(k, tensorFromJson(v as Map<String, dynamic>)));
   final expected = (j['expected'] as Map<String, dynamic>)

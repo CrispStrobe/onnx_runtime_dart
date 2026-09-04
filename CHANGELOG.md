@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.10.8
+
+- Retain four hardware-sensitive execution strategies as explicit, per-model
+  `OnnxExperiment` flags: in-place Relu, in-place Add-Relu, cached decoded
+  attributes, and narrow direct GEMM. All remain disabled by default and can be
+  benchmarked individually or in combination with `tool/bench.dart`.
+- Experimental Winograd GEMM and in-place graph rewrites have parity coverage;
+  observed intermediate graph outputs are never reused in place.
+
 ## 0.10.7
 
 - **Branchless Winograd input transforms.** A reusable padded input lets every

@@ -8,7 +8,8 @@ import 'dart:typed_data';
 /// Computes `out[m×n] += a[m×k] · b[k×n]` (row-major, at the given flat
 /// offsets). `out` is assumed zero-initialized (fresh allocation).
 void matmulKernel(Float32List a, int aOff, Float32List b, int bOff,
-    Float32List out, int outOff, int m, int k, int n) {
+    Float32List out, int outOff, int m, int k, int n,
+    {bool narrowDirect = false}) {
   // 4-row unroll: each loaded b value is reused for 4 output rows, which
   // quarters B memory traffic vs the naive i-k-j loop.
   int i = 0;

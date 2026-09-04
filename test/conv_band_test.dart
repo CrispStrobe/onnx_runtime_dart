@@ -32,12 +32,17 @@ void main() {
       final w = _rand([4, shape[1], 3, 3]);
       final bias = _rand([4]);
       final reference = nn.opConv(x, w, bias, pads: [1, 1, 1, 1]);
-      final actual = nn.opConv(x, w, bias,
-          pads: [1, 1, 1, 1], winogradPlan: nn.pretransformWinogradF2x2(w));
-      expect(actual.shape, reference.shape);
-      for (int i = 0; i < actual.length; i++) {
-        expect(actual.getD(i), closeTo(reference.getD(i), 2e-5),
-            reason: 'shape=$shape element=$i');
+      for (final narrowDirectGemm in [false, true]) {
+        final actual = nn.opConv(x, w, bias,
+            pads: [1, 1, 1, 1],
+            winogradPlan: nn.pretransformWinogradF2x2(w,
+                narrowDirectGemm: narrowDirectGemm));
+        expect(actual.shape, reference.shape);
+        for (int i = 0; i < actual.length; i++) {
+          expect(actual.getD(i), closeTo(reference.getD(i), 2e-5),
+              reason:
+                  'shape=$shape narrowDirectGemm=$narrowDirectGemm element=$i');
+        }
       }
     }
   });

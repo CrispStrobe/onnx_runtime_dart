@@ -26,8 +26,7 @@ const _seedPaths = [
   'test/fixtures/trilu_upper/model.onnx',
 ];
 
-bool _isCleanReject(Object e) =>
-    e is FormatException || e is UnsupportedError;
+bool _isCleanReject(Object e) => e is FormatException || e is UnsupportedError;
 
 /// CI can shorten a run: `FUZZ_BUDGET_MS` / `FUZZ_ITERS`.
 int _env(String k, int def) =>
