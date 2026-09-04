@@ -10,8 +10,7 @@ import 'dart:typed_data';
 
 // SIMD GEMM kernel on native targets (VM/AOT, where Float32x4 maps to real
 // SSE/NEON); portable scalar kernel on web targets where it's emulated.
-import 'gemm_kernel_scalar.dart'
-    if (dart.library.ffi) 'gemm_kernel_simd.dart'
+import 'gemm_kernel_scalar.dart' if (dart.library.ffi) 'gemm_kernel_simd.dart'
     as gemm;
 import 'onnx_proto_loader.dart' show float32ToHalfBits, halfToFloat32Bits;
 import 'tensor.dart';
@@ -179,9 +178,7 @@ Tensor? _arithFloatFast(Tensor a, Tensor b, _Arith op) {
       b.shape[a.rank - 1] == 1 &&
       a.shape[a.rank - 1] > 1 &&
       _shapeEq(
-        a.shape.sublist(0, a.rank - 1),
-        b.shape.sublist(0, b.rank - 1),
-      )) {
+          a.shape.sublist(0, a.rank - 1), b.shape.sublist(0, b.rank - 1))) {
     final d = a.shape[a.rank - 1];
     final rows = bn; // = an ~/ d
     final out = Float32List(an);
@@ -287,10 +284,7 @@ Tensor? _arithFloatFast(Tensor a, Tensor b, _Arith op) {
 }
 
 Tensor _elementwiseBinary(
-  Tensor a,
-  Tensor b,
-  double Function(double, double) op,
-) {
+    Tensor a, Tensor b, double Function(double, double) op) {
   final bothInt = !a.isFloat && !b.isFloat;
 
   // Fast path: identical shapes (the common case for residual adds etc.) —
@@ -410,8 +404,11 @@ Tensor opMul(Tensor a, Tensor b) =>
 /// (result takes the dividend's sign, `remainder`); false = integer/numpy mod
 /// (result takes the divisor's sign). The NSF source generator in RVC's decoder
 /// wraps sine phase with Mod.
-Tensor opMod(Tensor a, Tensor b, bool fmod) =>
-    _elementwiseBinary(a, b, fmod ? (x, y) => x.remainder(y) : (x, y) => x % y);
+Tensor opMod(Tensor a, Tensor b, bool fmod) => _elementwiseBinary(
+      a,
+      b,
+      fmod ? (x, y) => x.remainder(y) : (x, y) => x % y,
+    );
 Tensor opDiv(Tensor a, Tensor b) {
   // Integer division truncates toward zero per the ONNX spec (the generic
   // path would round the float quotient — off by one on length arithmetic
@@ -539,8 +536,7 @@ double _erf(double x) {
   const a1 = 0.254829592, a2 = -0.284496736, a3 = 1.421413741;
   const a4 = -1.453152027, a5 = 1.061405429, p = 0.3275911;
   final t = 1.0 / (1.0 + p * x);
-  final y =
-      1.0 -
+  final y = 1.0 -
       (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * math.exp(-x * x);
   return sign * y;
 }
@@ -693,17 +689,16 @@ Tensor opTranspose(Tensor x, List<int> perm) {
 }
 
 Tensor opSqueeze(Tensor x, List<int>? axes) {
-  final ax =
-      (axes ??
-              [
-                for (int k = 0; k < x.shape.length; k++)
-                  if (x.shape[k] == 1) k,
-              ])
-          .map((a) => a < 0 ? a + x.shape.length : a)
-          .toSet();
+  final ax = (axes ??
+          [
+            for (int k = 0; k < x.shape.length; k++)
+              if (x.shape[k] == 1) k
+          ])
+      .map((a) => a < 0 ? a + x.shape.length : a)
+      .toSet();
   final newShape = [
     for (int k = 0; k < x.shape.length; k++)
-      if (!ax.contains(k)) x.shape[k],
+      if (!ax.contains(k)) x.shape[k]
   ];
   return x.reshape(newShape);
 }
@@ -770,7 +765,7 @@ Tensor opGather(Tensor data, Tensor indices, int axis) {
   final outShape = [
     ...data.shape.sublist(0, ax),
     ...idxShape,
-    ...data.shape.sublist(ax + 1),
+    ...data.shape.sublist(ax + 1)
   ];
 
   final outerSize = data.shape.sublist(0, ax).fold<int>(1, (a, b) => a * b);
@@ -865,13 +860,8 @@ Tensor opExpand(Tensor x, Tensor shapeT) {
   }
 }
 
-Tensor opSlice(
-  Tensor x,
-  List<int> starts,
-  List<int> ends,
-  List<int>? axes,
-  List<int>? steps,
-) {
+Tensor opSlice(Tensor x, List<int> starts, List<int> ends, List<int>? axes,
+    List<int>? steps) {
   final rank = x.shape.length;
   final ax = axes ?? List<int>.generate(starts.length, (k) => k);
   final st = steps ?? List<int>.filled(starts.length, 1);
@@ -900,13 +890,9 @@ Tensor opSlice(
   for (int a = 0; a < rank; a++) {
     final cnt = normStep[a] > 0
         ? math.max(
-            0,
-            (normEnd[a] - normStart[a] + normStep[a] - 1) ~/ normStep[a],
-          )
+            0, (normEnd[a] - normStart[a] + normStep[a] - 1) ~/ normStep[a])
         : math.max(
-            0,
-            (normStart[a] - normEnd[a] - normStep[a] - 1) ~/ (-normStep[a]),
-          );
+            0, (normStart[a] - normEnd[a] - normStep[a] - 1) ~/ (-normStep[a]));
     outShape.add(cnt);
   }
 
@@ -948,8 +934,7 @@ Tensor opReduceMean(Tensor x, List<int>? axes, bool keepdims) {
   // LayerNorm's last-axis mean and CNN global-average pooling over NCHW's
   // spatial axes: each output is the mean of one contiguous row.
   final firstReducedAxis = rank - ax.length;
-  final reducesTrailingBlock =
-      ax.isNotEmpty &&
+  final reducesTrailingBlock = ax.isNotEmpty &&
       firstReducedAxis >= 0 &&
       List.generate(ax.length, (k) => firstReducedAxis + k).every(ax.contains);
   if (x.isFloat && reducesTrailingBlock) {
@@ -968,16 +953,14 @@ Tensor opReduceMean(Tensor x, List<int>? axes, bool keepdims) {
       out[r] = sum / d;
     }
     final shape = keepdims
-        ? [
-            ...x.shape.sublist(0, firstReducedAxis),
-            ...List.filled(ax.length, 1),
-          ]
+        ? [...x.shape.sublist(0, firstReducedAxis),
+           ...List.filled(ax.length, 1)]
         : x.shape.sublist(0, firstReducedAxis);
     return Tensor.float(out, shape);
   }
 
   final outShapeFull = [
-    for (int k = 0; k < rank; k++) ax.contains(k) ? 1 : x.shape[k],
+    for (int k = 0; k < rank; k++) ax.contains(k) ? 1 : x.shape[k]
   ];
   final reducedCount = ax.fold<int>(1, (acc, k) => acc * x.shape[k]);
 
@@ -1002,7 +985,7 @@ Tensor opReduceMean(Tensor x, List<int>? axes, bool keepdims) {
   if (keepdims) return Tensor.float(out, outShapeFull);
   final squeezedShape = [
     for (int k = 0; k < rank; k++)
-      if (!ax.contains(k)) x.shape[k],
+      if (!ax.contains(k)) x.shape[k]
   ];
   return Tensor.float(out, squeezedShape);
 }
@@ -1014,7 +997,7 @@ Tensor opReduceProd(Tensor x, List<int>? axes, bool keepdims) {
       .map((a) => a < 0 ? a + rank : a)
       .toSet();
   final outShapeFull = [
-    for (int k = 0; k < rank; k++) ax.contains(k) ? 1 : x.shape[k],
+    for (int k = 0; k < rank; k++) ax.contains(k) ? 1 : x.shape[k]
   ];
   final n = outShapeFull.fold<int>(1, (a, b) => a * b);
   final prods = Float64List(n)..fillRange(0, n, 1);
@@ -1035,7 +1018,7 @@ Tensor opReduceProd(Tensor x, List<int>? axes, bool keepdims) {
       ? outShapeFull
       : [
           for (int k = 0; k < rank; k++)
-            if (!ax.contains(k)) x.shape[k],
+            if (!ax.contains(k)) x.shape[k]
         ];
   if (x.isFloat) {
     final out = Float32List(n);
@@ -1116,21 +1099,16 @@ Tensor opReduceL2(Tensor x, List<int>? axes, bool keepdims) {
 /// [splitSizes] when given, else evenly (ceil-divided, last part smaller —
 /// the opset-18 `num_outputs` rule, which reduces to equal parts when the
 /// axis divides evenly).
-List<Tensor> opSplit(
-  Tensor x,
-  int axis,
-  int numOutputs, [
-  List<int>? splitSizes,
-]) {
+List<Tensor> opSplit(Tensor x, int axis, int numOutputs,
+    [List<int>? splitSizes]) {
   final ax = axis < 0 ? axis + x.rank : axis;
   final dim = x.shape[ax];
-  final sizes =
-      splitSizes ??
+  final sizes = splitSizes ??
       () {
         final chunk = (dim + numOutputs - 1) ~/ numOutputs;
         return [
           for (int i = 0; i < numOutputs; i++)
-            i < numOutputs - 1 ? chunk : dim - chunk * (numOutputs - 1),
+            i < numOutputs - 1 ? chunk : dim - chunk * (numOutputs - 1)
         ];
       }();
   final outs = <Tensor>[];
@@ -1176,18 +1154,11 @@ Tensor opGlu(Tensor x, int axis) {
 /// ONNX graph does its own `Pad` beforehand). [onesided] keeps
 /// `dftSize/2 + 1` bins. Odd or non-power-of-2 frame lengths are fine — bins
 /// come from a direct DFT over a single-period twiddle table.
-Tensor opSTFT(
-  Tensor signal,
-  int frameStep,
-  Tensor? window,
-  int? frameLength, {
-  bool onesided = true,
-}) {
+Tensor opSTFT(Tensor signal, int frameStep, Tensor? window, int? frameLength,
+    {bool onesided = true}) {
   // Signal is [batch, len] or [batch, len, 1].
-  assert(
-    signal.rank == 2 || (signal.rank == 3 && signal.shape[2] == 1),
-    'STFT supports real signals only',
-  );
+  assert(signal.rank == 2 || (signal.rank == 3 && signal.shape[2] == 1),
+      'STFT supports real signals only');
   final batch = signal.shape[0], len = signal.shape[1];
   final n = frameLength ?? window!.length;
   final win = window?.asFloatList();
@@ -1231,19 +1202,15 @@ Tensor opSTFT(
 
 /// `ReduceMax` / `ReduceMin` (dtype-preserving, unlike the mean/sum
 /// reductions which are float by definition).
-Tensor opReduceMinMax(
-  Tensor x,
-  List<int>? axes,
-  bool keepdims, {
-  required bool isMax,
-}) {
+Tensor opReduceMinMax(Tensor x, List<int>? axes, bool keepdims,
+    {required bool isMax}) {
   final rank = x.shape.length;
   final ax =
       (axes == null || axes.isEmpty ? List<int>.generate(rank, (k) => k) : axes)
           .map((a) => a < 0 ? a + rank : a)
           .toSet();
   final outShapeFull = [
-    for (int k = 0; k < rank; k++) ax.contains(k) ? 1 : x.shape[k],
+    for (int k = 0; k < rank; k++) ax.contains(k) ? 1 : x.shape[k]
   ];
   final n = outShapeFull.fold<int>(1, (a, b) => a * b);
   final outStridesFull = Tensor.filledFloat(outShapeFull, 0).strides;
@@ -1268,7 +1235,7 @@ Tensor opReduceMinMax(
       ? outShapeFull
       : [
           for (int k = 0; k < rank; k++)
-            if (!ax.contains(k)) x.shape[k],
+            if (!ax.contains(k)) x.shape[k]
         ];
   if (x.isFloat) {
     final out = Float32List(n);
@@ -1361,8 +1328,8 @@ Tensor opLogSoftmax(Tensor x, int axis) {
       double sum = 0;
       for (int a = 0; a < axisSize; a++) {
         sum += math.exp(
-          x.getD(outer * axisSize * innerSize + a * innerSize + inner) - maxV,
-        );
+            x.getD(outer * axisSize * innerSize + a * innerSize + inner) -
+                maxV);
       }
       final logSum = maxV + math.log(sum);
       for (int a = 0; a < axisSize; a++) {
@@ -1375,12 +1342,7 @@ Tensor opLogSoftmax(Tensor x, int axis) {
 }
 
 Tensor opLayerNormalization(
-  Tensor x,
-  Tensor scale,
-  Tensor bias,
-  int axis,
-  double epsilon,
-) {
+    Tensor x, Tensor scale, Tensor bias, int axis, double epsilon) {
   final rank = x.shape.length;
   final ax = axis < 0 ? axis + rank : axis;
   final outerSize = x.shape.sublist(0, ax).fold<int>(1, (a, b) => a * b);
@@ -1486,10 +1448,8 @@ Tensor opRMSNorm(Tensor x, Tensor gamma, int axis, double eps) {
   // The original chain's rank-1 Mul(gamma) broadcasts along the LAST axis
   // regardless of the reduce axis — enforce the shapes that makes valid.
   if (gf.length != x.shape[x.rank - 1]) {
-    throw ArgumentError(
-      'RMSNorm gamma length ${gf.length} != last dim '
-      '${x.shape[x.rank - 1]}',
-    );
+    throw ArgumentError('RMSNorm gamma length ${gf.length} != last dim '
+        '${x.shape[x.rank - 1]}');
   }
   final out = Float32List(xf.length);
   if (ax == x.rank - 1) {
@@ -1552,59 +1512,40 @@ Tensor opRMSNorm(Tensor x, Tensor gamma, int axis, double eps) {
 /// `[batch, kvNumHeads, pastLen+seq, headSize]` concatenation (the RoPE'd K and
 /// the raw V), ready to feed back as the next step's past. Query token `i` has
 /// absolute position `pastLen+i` and attends causally to keys `0..pastLen+i`.
-List<Tensor> opGroupQueryAttention(
-  Tensor q,
-  Tensor k,
-  Tensor v, {
-  required int numHeads,
-  required int kvNumHeads,
-  double? scale,
-  bool doRotary = false,
-  bool rotaryInterleaved = false,
-  Tensor? cosCache,
-  Tensor? sinCache,
-  Tensor? pastKey,
-  Tensor? pastValue,
-  Tensor? attentionBias,
-  double softcap = 0,
-  int localWindow = -1,
-}) {
+List<Tensor> opGroupQueryAttention(Tensor q, Tensor k, Tensor v,
+    {required int numHeads,
+    required int kvNumHeads,
+    double? scale,
+    bool doRotary = false,
+    bool rotaryInterleaved = false,
+    Tensor? cosCache,
+    Tensor? sinCache,
+    Tensor? pastKey,
+    Tensor? pastValue,
+    Tensor? attentionBias,
+    double softcap = 0,
+    int localWindow = -1}) {
   if (softcap != 0 || localWindow > 0) {
     throw UnsupportedError(
-      'GroupQueryAttention: softcap / local_window not supported',
-    );
+        'GroupQueryAttention: softcap / local_window not supported');
   }
   final batch = q.shape[0], seq = q.shape[1];
   final headSize = q.shape[2] ~/ numHeads;
   final group = numHeads ~/ kvNumHeads;
   final kvHidden = kvNumHeads * headSize;
-  final pastLen = (pastKey != null && pastKey.shape.length == 4)
-      ? pastKey.shape[2]
-      : 0;
+  final pastLen =
+      (pastKey != null && pastKey.shape.length == 4) ? pastKey.shape[2] : 0;
   final totalLen = pastLen + seq;
 
   var qq = q, kk = k;
   if (doRotary) {
     final pos = Tensor.int64(
-      Int64List.fromList([for (int s = 0; s < seq; s++) pastLen + s]),
-      [1, seq],
-    );
-    qq = opRotaryEmbedding(
-      q,
-      pos,
-      cosCache!,
-      sinCache!,
-      interleaved: rotaryInterleaved,
-      numHeads: numHeads,
-    );
-    kk = opRotaryEmbedding(
-      k,
-      pos,
-      cosCache,
-      sinCache,
-      interleaved: rotaryInterleaved,
-      numHeads: kvNumHeads,
-    );
+        Int64List.fromList([for (int s = 0; s < seq; s++) pastLen + s]),
+        [1, seq]);
+    qq = opRotaryEmbedding(q, pos, cosCache!, sinCache!,
+        interleaved: rotaryInterleaved, numHeads: numHeads);
+    kk = opRotaryEmbedding(k, pos, cosCache, sinCache,
+        interleaved: rotaryInterleaved, numHeads: kvNumHeads);
   }
   final s = scale ?? (1.0 / math.sqrt(headSize));
   final qf = qq.f!, kf = kk.f!, vf = v.f ?? v.asFloatList();
@@ -1664,9 +1605,8 @@ List<Tensor> opGroupQueryAttention(
       }
       scores.fillRange(0, seq * totalLen, 0);
       gemm.matmulKernel(qh, 0, kt, 0, scores, 0, seq, headSize, totalLen);
-      final biasBase = bias == null
-          ? 0
-          : (b * biasHeads + (h % biasHeads)) * seq * totalLen;
+      final biasBase =
+          bias == null ? 0 : (b * biasHeads + (h % biasHeads)) * seq * totalLen;
       for (int i = 0; i < seq; i++) {
         final row = i * totalLen;
         // token i (absolute position pastLen+i) attends causally to keys
@@ -1697,16 +1637,7 @@ List<Tensor> opGroupQueryAttention(
       // per-head V slice is contiguous at baseP.
       ctx.fillRange(0, seq * headSize, 0);
       gemm.matmulKernel(
-        scores,
-        0,
-        presentV,
-        baseP,
-        ctx,
-        0,
-        seq,
-        totalLen,
-        headSize,
-      );
+          scores, 0, presentV, baseP, ctx, 0, seq, totalLen, headSize);
       for (int i = 0; i < seq; i++) {
         final dst = (b * seq + i) * numHeads * headSize + h * headSize;
         for (int d = 0; d < headSize; d++) {
@@ -1727,14 +1658,8 @@ List<Tensor> opGroupQueryAttention(
 /// is an additive `[batch, heads, seq, kvSeq]` mask added to the scaled
 /// scores before softmax. Q/K/V may carry different head counts already
 /// expanded to match (grouped-query attention is expanded upstream here).
-Tensor opMultiHeadAttention(
-  Tensor q,
-  Tensor k,
-  Tensor v,
-  Tensor? attentionBias, {
-  required int numHeads,
-  double? scale,
-}) {
+Tensor opMultiHeadAttention(Tensor q, Tensor k, Tensor v, Tensor? attentionBias,
+    {required int numHeads, double? scale}) {
   final batch = q.shape[0], seq = q.shape[1], hidden = q.shape[2];
   final headSize = hidden ~/ numHeads;
   final kvSeq = k.shape[1];
@@ -1771,9 +1696,8 @@ Tensor opMultiHeadAttention(
       // scores = Q·Kᵀ, then scale + bias + row softmax.
       scores.fillRange(0, seq * kvSeq, 0);
       gemm.matmulKernel(qh, 0, kt, 0, scores, 0, seq, headSize, kvSeq);
-      final biasBase = bias == null
-          ? 0
-          : (b * biasHeads + (h % biasHeads)) * seq * kvSeq;
+      final biasBase =
+          bias == null ? 0 : (b * biasHeads + (h % biasHeads)) * seq * kvSeq;
       for (int i = 0; i < seq; i++) {
         final row = i * kvSeq;
         double maxV = double.negativeInfinity;
@@ -1827,14 +1751,12 @@ Tensor opFusedSDPA(Tensor a, Tensor b, Tensor v, Tensor mask, double scale) {
   final maskLastStride = mask.shape.isNotEmpty && mask.shape.last == t ? 1 : 0;
   final rowCoords = List<int>.filled(rowShape.length, 0);
   // Mask shape aligned against the full score shape, minus its last axis.
-  final maskRowShape = mask.rank == 0
-      ? const <int>[]
-      : mask.shape.sublist(0, mask.rank - 1);
+  final maskRowShape =
+      mask.rank == 0 ? const <int>[] : mask.shape.sublist(0, mask.rank - 1);
 
   for (int r = 0; r < rows; r++) {
     final base = r * t;
-    final mBase =
-        _flattenBroadcast(rowCoords, maskRowShape) *
+    final mBase = _flattenBroadcast(rowCoords, maskRowShape) *
         (mask.rank == 0 ? 0 : mask.shape.last);
     double max = double.negativeInfinity;
     for (int j = 0; j < t; j++) {
@@ -1860,15 +1782,11 @@ Tensor opFusedSDPA(Tensor a, Tensor b, Tensor v, Tensor mask, double scale) {
 }
 
 /// Gemm: Y = alpha * A' * B' + beta * C  (A'/B' optionally transposed)
-Tensor opGemm(
-  Tensor a,
-  Tensor b,
-  Tensor? c, {
-  double alpha = 1.0,
-  double beta = 1.0,
-  bool transA = false,
-  bool transB = false,
-}) {
+Tensor opGemm(Tensor a, Tensor b, Tensor? c,
+    {double alpha = 1.0,
+    double beta = 1.0,
+    bool transA = false,
+    bool transB = false}) {
   final at = transA ? opTranspose(a, [1, 0]) : a;
   final bt = transB ? opTranspose(b, [1, 0]) : b;
   final mm = opMatMul(at, bt);
@@ -1906,10 +1824,8 @@ Tensor opEinsum(String equation, List<Tensor> inputs) {
   final arrowSplit = eq.split('->');
   final terms = arrowSplit[0].split(',');
   if (terms.length != inputs.length || inputs.length > 2) {
-    throw UnsupportedError(
-      'Einsum: ${inputs.length} inputs vs '
-      '${terms.length} terms in "$equation" (max 2 supported)',
-    );
+    throw UnsupportedError('Einsum: ${inputs.length} inputs vs '
+        '${terms.length} terms in "$equation" (max 2 supported)');
   }
 
   // Label -> dimension size, checked for consistency across operands.
@@ -1917,10 +1833,8 @@ Tensor opEinsum(String equation, List<Tensor> inputs) {
   final counts = <String, int>{};
   for (int t = 0; t < terms.length; t++) {
     if (terms[t].length != inputs[t].rank) {
-      throw ArgumentError(
-        'Einsum term "${terms[t]}" vs rank '
-        '${inputs[t].rank} operand',
-      );
+      throw ArgumentError('Einsum term "${terms[t]}" vs rank '
+          '${inputs[t].rank} operand');
     }
     for (int a = 0; a < terms[t].length; a++) {
       final l = terms[t][a];
@@ -1937,16 +1851,15 @@ Tensor opEinsum(String equation, List<Tensor> inputs) {
       ? arrowSplit[1]
       : ([
           for (final l in (counts.keys.toList()..sort()))
-            if (counts[l] == 1) l,
+            if (counts[l] == 1) l
         ].join());
   if (outTerm.split('').toSet().length != outTerm.length) {
     throw UnsupportedError(
-      'Einsum: repeated output labels not supported ("$equation")',
-    );
+        'Einsum: repeated output labels not supported ("$equation")');
   }
   final sumLabels = [
     for (final l in sizeOf.keys)
-      if (!outTerm.contains(l)) l,
+      if (!outTerm.contains(l)) l
   ]..sort();
 
   // Global coordinate order: output labels then contraction labels.
@@ -1999,9 +1912,7 @@ Tensor opEinsum(String equation, List<Tensor> inputs) {
   // Output dtype follows the inputs (integer einsum stays integer).
   if (inputs.every((t) => !t.isFloat)) {
     return Tensor.int64(
-      Int64List.fromList([for (final v in out) v.round()]),
-      outShape,
-    );
+        Int64List.fromList([for (final v in out) v.round()]), outShape);
   }
   return Tensor.float(out, outShape);
 }
@@ -2108,11 +2019,8 @@ Tensor _boolBinary(Tensor a, Tensor b, bool Function(double, double) p) {
   final coords = List<int>.filled(outShape.length, 0);
   final out = Int64List(n);
   for (int idx = 0; idx < n; idx++) {
-    out[idx] =
-        p(
-          a.getD(_flattenBroadcast(coords, a.shape)),
-          b.getD(_flattenBroadcast(coords, b.shape)),
-        )
+    out[idx] = p(a.getD(_flattenBroadcast(coords, a.shape)),
+            b.getD(_flattenBroadcast(coords, b.shape)))
         ? 1
         : 0;
     for (int k = outShape.length - 1; k >= 0; k--) {
@@ -2149,19 +2057,15 @@ Tensor opIsNaN(Tensor a) {
   return Tensor.int64(out, a.shape);
 }
 
-Tensor opIsInf(
-  Tensor a, {
-  bool detectPositive = true,
-  bool detectNegative = true,
-}) {
+Tensor opIsInf(Tensor a,
+    {bool detectPositive = true, bool detectNegative = true}) {
   final n = a.length;
   final out = Int64List(n);
   if (a.isFloat) {
     final af = a.f!;
     for (int k = 0; k < n; k++) {
       final v = af[k];
-      out[k] =
-          (v.isInfinite &&
+      out[k] = (v.isInfinite &&
               ((v > 0 && detectPositive) || (v < 0 && detectNegative)))
           ? 1
           : 0;
@@ -2177,10 +2081,8 @@ Tensor opMin(List<Tensor> ins) =>
 
 /// Element-wise select: `cond ? a : b`, broadcasting all three inputs.
 Tensor opWhere(Tensor cond, Tensor a, Tensor b) {
-  final outShape = _broadcastShape(
-    _broadcastShape(cond.shape, a.shape),
-    b.shape,
-  );
+  final outShape =
+      _broadcastShape(_broadcastShape(cond.shape, a.shape), b.shape);
   final n = outShape.fold<int>(1, (x, y) => x * y);
   final bothInt = !a.isFloat && !b.isFloat;
   final coords = List<int>.filled(outShape.length, 0);
@@ -2225,14 +2127,8 @@ Tensor opSize(Tensor x) => Tensor.scalarInt(x.length);
 /// first `rotaryDim` of each head is rotated (the tail passes through);
 /// `interleaved` selects the GPT-J pairing, else the GPT-NeoX rotate-half.
 Tensor opRotaryEmbedding(
-  Tensor x,
-  Tensor positionIds,
-  Tensor cosCache,
-  Tensor sinCache, {
-  bool interleaved = false,
-  int numHeads = 0,
-  int rotaryEmbeddingDim = 0,
-}) {
+    Tensor x, Tensor positionIds, Tensor cosCache, Tensor sinCache,
+    {bool interleaved = false, int numHeads = 0, int rotaryEmbeddingDim = 0}) {
   final xf = x.f ?? x.asFloatList();
   final cos = cosCache.asFloatList(), sin = sinCache.asFloatList();
   final pos = positionIds.asIntList();
@@ -2307,13 +2203,8 @@ Tensor opRandomNormalFill(List<int> shape, double mean) {
 
 /// `ArgMax` / `ArgMin` along [axis]; ties resolve to the first (or, with
 /// [selectLastIndex], the last) occurrence.
-Tensor opArgMinMax(
-  Tensor x,
-  int axis,
-  bool keepdims, {
-  required bool isMax,
-  bool selectLastIndex = false,
-}) {
+Tensor opArgMinMax(Tensor x, int axis, bool keepdims,
+    {required bool isMax, bool selectLastIndex = false}) {
   final ax = axis < 0 ? axis + x.rank : axis;
   final dim = x.shape[ax];
   int outer = 1, inner = 1;
@@ -2348,7 +2239,7 @@ Tensor opArgMinMax(
   }
   final shape = [
     for (int a = 0; a < x.rank; a++)
-      if (a != ax) x.shape[a] else if (keepdims) 1,
+      if (a != ax) x.shape[a] else if (keepdims) 1
   ];
   return Tensor.int64(out, shape);
 }
@@ -2414,9 +2305,7 @@ List<Tensor> opTopK(Tensor x, int k, {int axis = -1, bool largest = true}) {
     x.isFloat
         ? vT
         : Tensor.int64(
-            Int64List.fromList([for (final v in values) v.toInt()]),
-            outShape,
-          ),
+            Int64List.fromList([for (final v in values) v.toInt()]), outShape),
     Tensor.int64(indices, outShape),
   ];
 }
@@ -2424,14 +2313,11 @@ List<Tensor> opTopK(Tensor x, int k, {int axis = -1, bool largest = true}) {
 /// `NonMaxSuppression` — greedy per-(batch, class) suppression. Returns
 /// `[num_selected, 3]` int64 rows of (batch, class, boxIndex), in
 /// batch-major, class-major, descending-score order (matching ORT).
-Tensor opNonMaxSuppression(
-  Tensor boxes,
-  Tensor scores, {
-  int maxOutputBoxesPerClass = 0,
-  double iouThreshold = 0,
-  double? scoreThreshold,
-  bool centerPointBox = false,
-}) {
+Tensor opNonMaxSuppression(Tensor boxes, Tensor scores,
+    {int maxOutputBoxesPerClass = 0,
+    double iouThreshold = 0,
+    double? scoreThreshold,
+    bool centerPointBox = false}) {
   final nBatch = boxes.shape[0], nBox = boxes.shape[1];
   final nClass = scores.shape[1];
   final bf = boxes.asFloatList(), sf = scores.asFloatList();
@@ -2566,11 +2452,8 @@ Tensor opScatterND(Tensor data, Tensor indices, Tensor updates) {
       if (v < 0) v += data.shape[d];
       off += v * strides[d];
     }
-    out.setRange(
-      off,
-      off + blockLen,
-      Int64List.sublistView(ui, t * blockLen, (t + 1) * blockLen),
-    );
+    out.setRange(off, off + blockLen,
+        Int64List.sublistView(ui, t * blockLen, (t + 1) * blockLen));
   }
   return Tensor.int64(out, data.shape);
 }
@@ -2635,14 +2518,8 @@ int _channelOf(int k, List<int> shape, int axis) {
 /// per-tensor or per-axis. [lo]/[hi] are the saturation bounds of the output
 /// type (from the zero-point tensor's dtype: uint8 → 0..255, int8 →
 /// -128..127).
-Tensor opQuantizeLinear(
-  Tensor x,
-  Tensor scale,
-  Tensor? zeroPoint, {
-  int axis = 1,
-  required int lo,
-  required int hi,
-}) {
+Tensor opQuantizeLinear(Tensor x, Tensor scale, Tensor? zeroPoint,
+    {int axis = 1, required int lo, required int hi}) {
   final n = x.length;
   // Compact output: int8 when the range is signed, uint8 otherwise.
   final signed = lo < 0;
@@ -2666,12 +2543,8 @@ Tensor opQuantizeLinear(
 }
 
 /// `DequantizeLinear`: `y = (x - zeroPoint) * scale`, per-tensor or per-axis.
-Tensor opDequantizeLinear(
-  Tensor x,
-  Tensor scale,
-  Tensor? zeroPoint, {
-  int axis = 1,
-}) {
+Tensor opDequantizeLinear(Tensor x, Tensor scale, Tensor? zeroPoint,
+    {int axis = 1}) {
   final n = x.length;
   final out = Float32List(n);
   final perAxis = scale.length > 1;
@@ -2743,7 +2616,7 @@ Tensor opPad(
     }
   }
   final outShape = [
-    for (int a = 0; a < rank; a++) x.shape[a] + beg[a] + end[a],
+    for (int a = 0; a < rank; a++) x.shape[a] + beg[a] + end[a]
   ];
   final n = outShape.fold<int>(1, (a, b) => a * b);
   final srcStrides = x.strides;
@@ -2829,7 +2702,7 @@ Tensor opReduceSum(Tensor x, List<int>? axes, bool keepdims) {
       .map((a) => a < 0 ? a + rank : a)
       .toSet();
   final outShapeFull = [
-    for (int k = 0; k < rank; k++) ax.contains(k) ? 1 : x.shape[k],
+    for (int k = 0; k < rank; k++) ax.contains(k) ? 1 : x.shape[k]
   ];
   final n = outShapeFull.fold<int>(1, (a, b) => a * b);
   final sums = Float64List(n);
@@ -2849,7 +2722,7 @@ Tensor opReduceSum(Tensor x, List<int>? axes, bool keepdims) {
   if (keepdims) return Tensor.float(out, outShapeFull);
   return Tensor.float(out, [
     for (int k = 0; k < rank; k++)
-      if (!ax.contains(k)) x.shape[k],
+      if (!ax.contains(k)) x.shape[k]
   ]);
 }
 
@@ -2886,12 +2759,8 @@ Tensor opGatherElements(Tensor data, Tensor indices, int axis) {
 /// `CumSum` along [axis] (inclusive, forward by default; [exclusive] shifts the
 /// sum, [reverse] accumulates from the end) — used e.g. to derive position ids
 /// from an attention mask.
-Tensor opCumSum(
-  Tensor x,
-  int axis, {
-  bool exclusive = false,
-  bool reverse = false,
-}) {
+Tensor opCumSum(Tensor x, int axis,
+    {bool exclusive = false, bool reverse = false}) {
   final rank = x.shape.length;
   final ax = axis < 0 ? axis + rank : axis;
   final axisStride = x.strides[ax];
