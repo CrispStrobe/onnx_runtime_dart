@@ -23,11 +23,12 @@ double _erfRef(double x) {
   x = x.abs();
   const p = 0.3275911;
   final t = 1.0 / (1.0 + p * x);
-  final y = 1.0 -
+  final y =
+      1.0 -
       (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t -
-                  0.284496736) *
-              t +
-          0.254829592) *
+                      0.284496736) *
+                  t +
+              0.254829592) *
           t *
           math.exp(-x * x);
   return sign * y;
@@ -46,9 +47,11 @@ void main() {
         NodeProto()
           ..opType = 'Constant'
           ..output.add('C1')
-          ..attribute.add(AttributeProto()
-            ..name = 'value'
-            ..t = floatInit('', [2], [1, 2])),
+          ..attribute.add(
+            AttributeProto()
+              ..name = 'value'
+              ..t = floatInit('', [2], [1, 2]),
+          ),
         NodeProto()
           ..opType = 'Neg'
           ..input.add('C1')
@@ -62,17 +65,22 @@ void main() {
           ..input.addAll(['X', 'C3'])
           ..output.add('Y'),
       ]);
-    final model =
-        OnnxModel.fromBytes((ModelProto()..graph = g).writeToBuffer());
+    final model = OnnxModel.fromBytes(
+      (ModelProto()..graph = g).writeToBuffer(),
+    );
     final profile = ExecutionProfile();
     final y = model.run(
-        {'X': Tensor.float(Float32List.fromList([100, 200]), [2])},
-        ['Y'],
-        profile: profile)['Y']!;
+      {
+        'X': Tensor.float(Float32List.fromList([100, 200]), [2]),
+      },
+      ['Y'],
+      profile: profile,
+    )['Y']!;
     // C3 = -[1,2] + [10,20] = [9,18]; Y = X + C3.
     expect(y.asFloatList(), [109.0, 218.0]);
-    expect(profile.callsByOp.keys.toList(), ['Add'],
-        reason: 'folded nodes must not run');
+    expect(profile.callsByOp.keys.toList(), [
+      'Add',
+    ], reason: 'folded nodes must not run');
     expect(profile.callsByOp['Add'], 1);
   });
 
@@ -96,16 +104,19 @@ void main() {
           ..input.addAll(['X', 'NW'])
           ..output.add('Y'),
       ]);
-    final model =
-        OnnxModel.fromBytes((ModelProto()..graph = g).writeToBuffer());
+    final model = OnnxModel.fromBytes(
+      (ModelProto()..graph = g).writeToBuffer(),
+    );
     final x = Tensor.float(Float32List.fromList([3, 5]), [2]);
 
     // Default W = [1,1] → Y = X * -W = [-3,-5].
     expect(model.run({'X': x}, ['Y'])['Y']!.asFloatList(), [-3.0, -5.0]);
     // Overridden W = [2,10] → Y = [-6,-50].
     final w = Tensor.float(Float32List.fromList([2, 10]), [2]);
-    expect(model.run({'X': x, 'W': w}, ['Y'])['Y']!.asFloatList(),
-        [-6.0, -50.0]);
+    expect(model.run({'X': x, 'W': w}, ['Y'])['Y']!.asFloatList(), [
+      -6.0,
+      -50.0,
+    ]);
   });
 
   group('pattern fusion', () {
@@ -155,13 +166,16 @@ void main() {
 
     test('erf-GELU chain fuses and computes gelu', () {
       final model = OnnxModel.fromBytes(
-          (ModelProto()..graph = geluGraph()).writeToBuffer());
-      final x = Tensor.float(
-          Float32List.fromList([-2, -0.5, 0, 0.5, 2]), [5]);
+        (ModelProto()..graph = geluGraph()).writeToBuffer(),
+      );
+      final x = Tensor.float(Float32List.fromList([-2, -0.5, 0, 0.5, 2]), [5]);
       final profile = ExecutionProfile();
       final y = model.run({'X': x}, ['Y'], profile: profile)['Y']!;
-      expect(profile.callsByOp.keys.toList(), ['_FusedGelu'],
-          reason: 'whole chain must fuse into one node');
+      expect(
+        profile.callsByOp.keys.toList(),
+        ['_FusedGelu'],
+        reason: 'whole chain must fuse into one node',
+      );
       for (int k = 0; k < 5; k++) {
         expect(y.asFloatList()[k], closeTo(gelu(x.asFloatList()[k]), 1e-4));
       }
@@ -169,17 +183,23 @@ void main() {
 
     test('fusion aborts when an intermediate is a graph output', () {
       final model = OnnxModel.fromBytes(
-          (ModelProto()..graph = geluGraph(leakIntermediate: true))
-              .writeToBuffer());
+        (ModelProto()..graph = geluGraph(leakIntermediate: true))
+            .writeToBuffer(),
+      );
       final x = Tensor.float(Float32List.fromList([1.0, -1.0]), [2]);
       final profile = ExecutionProfile();
       final out = model.run({'X': x}, ['Y', 'e'], profile: profile);
-      expect(profile.callsByOp.containsKey('Erf'), isTrue,
-          reason: 'unfused chain must still run node-by-node');
+      expect(
+        profile.callsByOp.containsKey('Erf'),
+        isTrue,
+        reason: 'unfused chain must still run node-by-node',
+      );
       expect(out['e']!.length, 2);
       for (int k = 0; k < 2; k++) {
-        expect(out['Y']!.asFloatList()[k],
-            closeTo(gelu(x.asFloatList()[k]), 1e-4));
+        expect(
+          out['Y']!.asFloatList()[k],
+          closeTo(gelu(x.asFloatList()[k]), 1e-4),
+        );
       }
     });
   });
@@ -229,8 +249,11 @@ void main() {
     }
 
     test('int64 transpose', () {
-      final x = Tensor.int64(
-          Int64List.fromList(List.generate(24, (k) => k)), [2, 3, 4]);
+      final x = Tensor.int64(Int64List.fromList(List.generate(24, (k) => k)), [
+        2,
+        3,
+        4,
+      ]);
       final got = ops.opTranspose(x, [2, 1, 0]);
       expect(got.shape, [4, 3, 2]);
       // element (a,b,c) of result = x[c,b,a] = c*12 + b*4 + a
@@ -240,11 +263,12 @@ void main() {
     });
   });
 
-  group('ReduceMean last-axis fast path', () {
+  group('ReduceMean trailing-axes fast path', () {
     test('matches general path result', () {
       final x = Tensor.float(
-          Float32List.fromList(List.generate(24, (k) => (k * 7 % 13) * 1.0)),
-          [2, 3, 4]);
+        Float32List.fromList(List.generate(24, (k) => (k * 7 % 13) * 1.0)),
+        [2, 3, 4],
+      );
       // axes=[-1] takes the fast path; axes=[2, unused-dup] shape variations
       // exercise the general path on the same reduction.
       final fast = ops.opReduceMean(x, [-1], true);
@@ -267,6 +291,32 @@ void main() {
       final y = ops.opReduceMean(x, [-1], false);
       expect(y.shape, [2]);
       expect(y.asFloatList(), [2.0, 5.0]);
+    });
+
+    test('reduces a contiguous trailing block', () {
+      final x = Tensor.float(
+        Float32List.fromList(List.generate(48, (k) => k.toDouble())),
+        [2, 3, 2, 4],
+      );
+
+      final kept = ops.opReduceMean(x, [2, 3], true);
+      final dropped = ops.opReduceMean(x, [-1, -2], false);
+
+      expect(kept.shape, [2, 3, 1, 1]);
+      expect(dropped.shape, [2, 3]);
+      expect(kept.asFloatList(), [3.5, 11.5, 19.5, 27.5, 35.5, 43.5]);
+      expect(dropped.asFloatList(), kept.asFloatList());
+    });
+
+    test('does not treat non-trailing axes as contiguous', () {
+      final x = Tensor.float(
+        Float32List.fromList(List.generate(24, (k) => k.toDouble())),
+        [2, 3, 4],
+      );
+      final y = ops.opReduceMean(x, [0, 2], false);
+
+      expect(y.shape, [3]);
+      expect(y.asFloatList(), [7.5, 11.5, 15.5]);
     });
   });
 }
