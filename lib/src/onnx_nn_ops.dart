@@ -208,6 +208,31 @@ Tensor opConv(
           bandEnd == null;
       final colRows = cPerGroup * kh * kw;
       final colN = oh * ow;
+      // im2col materializes colRows x colN floats and each element is reused
+      // only mPerGroup times, so with few output channels the packing traffic
+      // dwarfs the arithmetic. Stream a zero-padded input instead and keep
+      // the output accumulators in registers. Accumulation order (c, ky, kx)
+      // and float32 lane accumulation match the im2col GEMM exactly, so the
+      // results are bitwise identical.
+      if (!pointwise &&
+          kh * kw >= 4 &&
+          mPerGroup <= _directConvMaxChannels &&
+          ow >= 4) {
+        _convDirect2d(xf, wf, out, n, cIn, m, group, h, wd, kh, kw, sh, sw, dh,
+            dw, p[0], p[1], p[2], p[3], b0, oh, ow);
+        if (bf != null) {
+          for (int b = 0; b < n; b++) {
+            for (int om = 0; om < m; om++) {
+              final base = (b * m + om) * colN;
+              final bias0 = bf[om];
+              for (int k = 0; k < colN; k++) {
+                out[base + k] += bias0;
+              }
+            }
+          }
+        }
+        return Tensor.float(out, [n, m, oh, ow]);
+      }
       final workspaceSize = colRows * colN;
       final cols = pointwise
           ? null
@@ -382,6 +407,173 @@ Tensor opConv(
     }
   }
   return Tensor.float(out, [n, m, ...outSp]);
+}
+
+/// Output channels (per group) up to which the direct convolution path beats
+/// im2col + GEMM. Chosen by measurement on Basic Pitch's small-m convs.
+const int _directConvMaxChannels = 8;
+
+/// Direct (im2col-free) 2-D convolution, float32, for few output channels.
+///
+/// Two micro-kernels, both accumulating in `(c, ky, kx)` order into float32
+/// `Float32x4` lanes — the same order and precision as the im2col GEMM, so
+/// outputs are bitwise identical:
+///
+/// * `mPerGroup >= 4`: four output channels per `Float32x4`, one output pixel
+///   at a time. Weights are prepacked lane-major so the inner loop reads them
+///   sequentially through an aligned `Float32x4List`.
+/// * remaining channels: four output pixels per `Float32x4`, weight splatted.
+///   The x tail re-anchors at `ow - 4` (recomputing at most three columns)
+///   rather than falling back to a scalar loop, which would accumulate in
+///   double and diverge in the last bits.
+///
+/// Bias is added by the caller afterwards, as in the GEMM path.
+void _convDirect2d(
+    Float32List xf,
+    Float32List wf,
+    Float32List out,
+    int n,
+    int cIn,
+    int m,
+    int group,
+    int h,
+    int wd,
+    int kh,
+    int kw,
+    int sh,
+    int sw,
+    int dh,
+    int dw,
+    int padTop,
+    int padLeft,
+    int padBottom,
+    int padRight,
+    int b0,
+    int oh,
+    int ow) {
+  final cPerGroup = cIn ~/ group;
+  final mPerGroup = m ~/ group;
+  final hp = h + padTop + padBottom;
+  final wp = wd + padLeft + padRight;
+  final colRows = cPerGroup * kh * kw;
+  final planeIn = hp * wp;
+  final planeOut = oh * ow;
+  final xpad = Float32List(cPerGroup * planeIn);
+  final packed = Float32x4List(colRows);
+  final packedF = packed.buffer.asFloat32List();
+
+  for (int b = 0; b < n; b++) {
+    for (int g = 0; g < group; g++) {
+      xpad.fillRange(0, xpad.length, 0);
+      for (int c = 0; c < cPerGroup; c++) {
+        final src = (b * cIn + g * cPerGroup + c) * h * wd;
+        final dst = c * planeIn + padTop * wp + padLeft;
+        for (int y = 0; y < h; y++) {
+          xpad.setRange(dst + y * wp, dst + y * wp + wd, xf, src + y * wd);
+        }
+      }
+
+      int om = 0;
+      for (; om + 4 <= mPerGroup; om += 4) {
+        for (int r = 0; r < colRows; r++) {
+          final o = r * 4;
+          final wBase = (g * mPerGroup + om) * colRows + r;
+          packedF[o] = wf[wBase];
+          packedF[o + 1] = wf[wBase + colRows];
+          packedF[o + 2] = wf[wBase + 2 * colRows];
+          packedF[o + 3] = wf[wBase + 3 * colRows];
+        }
+        final o0 = (b * m + g * mPerGroup + om) * planeOut;
+        for (int oy = 0; oy < oh; oy++) {
+          final iyBase = (oy + b0) * sh * wp;
+          final oRow = o0 + oy * ow;
+          int ox = 0;
+          // Two output pixels per pass: the packed weight vector is loaded
+          // once and feeds both accumulators, halving weight traffic.
+          for (; ox + 2 <= ow; ox += 2) {
+            var acc0 = Float32x4.zero(), acc1 = Float32x4.zero();
+            int wi = 0;
+            final base0 = iyBase + ox * sw, base1 = base0 + sw;
+            for (int c = 0; c < cPerGroup; c++) {
+              int row0 = base0 + c * planeIn, row1 = base1 + c * planeIn;
+              for (int ky = 0; ky < kh; ky++) {
+                for (int kx = 0; kx < kw; kx++) {
+                  final wv = packed[wi];
+                  wi++;
+                  final off = kx * dw;
+                  acc0 += wv * Float32x4.splat(xpad[row0 + off]);
+                  acc1 += wv * Float32x4.splat(xpad[row1 + off]);
+                }
+                row0 += dh * wp;
+                row1 += dh * wp;
+              }
+            }
+            out[oRow + ox] = acc0.x;
+            out[oRow + ox + planeOut] = acc0.y;
+            out[oRow + ox + 2 * planeOut] = acc0.z;
+            out[oRow + ox + 3 * planeOut] = acc0.w;
+            out[oRow + ox + 1] = acc1.x;
+            out[oRow + ox + 1 + planeOut] = acc1.y;
+            out[oRow + ox + 1 + 2 * planeOut] = acc1.z;
+            out[oRow + ox + 1 + 3 * planeOut] = acc1.w;
+          }
+          for (; ox < ow; ox++) {
+            var acc = Float32x4.zero();
+            int wi = 0;
+            final rowBase = iyBase + ox * sw;
+            for (int c = 0; c < cPerGroup; c++) {
+              int row = rowBase + c * planeIn;
+              for (int ky = 0; ky < kh; ky++) {
+                for (int kx = 0; kx < kw; kx++) {
+                  acc += packed[wi] * Float32x4.splat(xpad[row + kx * dw]);
+                  wi++;
+                }
+                row += dh * wp;
+              }
+            }
+            out[oRow + ox] = acc.x;
+            out[oRow + ox + planeOut] = acc.y;
+            out[oRow + ox + 2 * planeOut] = acc.z;
+            out[oRow + ox + 3 * planeOut] = acc.w;
+          }
+        }
+      }
+
+      for (; om < mPerGroup; om++) {
+        final wBase = (g * mPerGroup + om) * colRows;
+        final oRowBase = (b * m + g * mPerGroup + om) * planeOut;
+        for (int oy = 0; oy < oh; oy++) {
+          final iyBase = (oy + b0) * sh * wp;
+          final oRow = oRowBase + oy * ow;
+          int ox = 0;
+          while (ox < ow) {
+            // Last tile re-anchors so every tile is a full vector.
+            if (ox + 4 > ow) ox = ow - 4;
+            var acc = Float32x4.zero();
+            int wi = wBase;
+            final i0 = iyBase + ox * sw;
+            for (int c = 0; c < cPerGroup; c++) {
+              int row = i0 + c * planeIn;
+              for (int ky = 0; ky < kh; ky++) {
+                for (int kx = 0; kx < kw; kx++) {
+                  final i = row + kx * dw;
+                  acc += Float32x4.splat(wf[wi++]) *
+                      Float32x4(xpad[i], xpad[i + sw], xpad[i + 2 * sw],
+                          xpad[i + 3 * sw]);
+                }
+                row += dh * wp;
+              }
+            }
+            out[oRow + ox] = acc.x;
+            out[oRow + ox + 1] = acc.y;
+            out[oRow + ox + 2] = acc.z;
+            out[oRow + ox + 3] = acc.w;
+            ox += 4;
+          }
+        }
+      }
+    }
+  }
 }
 
 class WinogradF2x2Plan {
