@@ -23,6 +23,30 @@ class ExecutionProfile {
   final Map<String, int> callsByOp = {};
   final Map<String, int> microsByOp = {};
 
+  /// When true, also accumulates per-node time keyed by
+  /// `opType  nodeName  inShapes` — diagnostics for finding the hot nodes
+  /// inside a single op type.
+  final bool perNode;
+  final Map<String, int> callsByNode = {};
+  final Map<String, int> microsByNode = {};
+
+  ExecutionProfile({this.perNode = false});
+
+  /// Per-node lines sorted by cumulative time (needs [perNode]).
+  String nodeReport({int top = 30}) {
+    final keys = microsByNode.keys.toList()
+      ..sort((a, b) => microsByNode[b]!.compareTo(microsByNode[a]!));
+    final total = totalMicros;
+    final b = StringBuffer();
+    for (final k in keys.take(top)) {
+      final us = microsByNode[k]!;
+      b.writeln('${(us / 1000).toStringAsFixed(1).padLeft(9)} ms'
+          '${'${(us * 100 / total).toStringAsFixed(1)}%'.padLeft(7)}'
+          '${callsByNode[k]!.toString().padLeft(5)}x  $k');
+    }
+    return b.toString();
+  }
+
   int get totalMicros => microsByOp.values.fold(0, (a, b) => a + b);
 
   /// Op types sorted by cumulative time, one line each:
@@ -850,6 +874,15 @@ class OnnxGraphExecutor {
         profile.microsByOp.update(
             node.opType, (v) => v + sw.elapsedMicroseconds,
             ifAbsent: () => sw.elapsedMicroseconds);
+        if (profile.perNode) {
+          final key = '${node.opType}  ${node.name}  '
+              '${[
+            for (final t in ins) t == null ? '-' : t.shape.toString()
+          ].join(' ')}';
+          profile.callsByNode.update(key, (v) => v + 1, ifAbsent: () => 1);
+          profile.microsByNode.update(key, (v) => v + sw.elapsedMicroseconds,
+              ifAbsent: () => sw.elapsedMicroseconds);
+        }
       }
       for (int k = 0; k < node.output.length && k < outs.length; k++) {
         if (node.output[k].isNotEmpty) values[node.output[k]] = outs[k];
@@ -898,6 +931,15 @@ class OnnxGraphExecutor {
         profile.microsByOp.update(
             node.opType, (v) => v + sw.elapsedMicroseconds,
             ifAbsent: () => sw.elapsedMicroseconds);
+        if (profile.perNode) {
+          final key = '${node.opType}  ${node.name}  '
+              '${[
+            for (final t in ins) t == null ? '-' : t.shape.toString()
+          ].join(' ')}';
+          profile.callsByNode.update(key, (v) => v + 1, ifAbsent: () => 1);
+          profile.microsByNode.update(key, (v) => v + sw.elapsedMicroseconds,
+              ifAbsent: () => sw.elapsedMicroseconds);
+        }
       }
       for (int k = 0; k < node.output.length && k < outs.length; k++) {
         if (node.output[k].isNotEmpty) values[node.output[k]] = outs[k];

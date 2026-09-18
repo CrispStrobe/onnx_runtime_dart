@@ -780,22 +780,50 @@ Tensor opConcat(List<Tensor> inputs, int axis) {
   final outerSize = outShape.sublist(0, ax).fold<int>(1, (a, b) => a * b);
   final innerSize = outShape.sublist(ax + 1).fold<int>(1, (a, b) => a * b);
 
-  for (int outer = 0; outer < outerSize; outer++) {
-    int axOffset = 0;
-    for (final t in inputs) {
-      final tAx = t.shape[ax];
-      final blockSize = tAx * innerSize;
-      final srcStart = outer * blockSize;
-      final dstStart = outer * outShape[ax] * innerSize + axOffset * innerSize;
-      for (int k = 0; k < blockSize; k++) {
-        if (isFloat) {
-          outF![dstStart + k] = t.f![srcStart + k];
+  // Per input, the copy is `outerSize` blocks of `blockSize` contiguous
+  // elements at a fixed output stride. Hoisting the dtype test out of the
+  // element loop (and using setRange once a block is worth the call) is the
+  // difference between a bulk copy and a per-element interpreter step.
+  final dstStride = outShape[ax] * innerSize;
+  int axOffset = 0;
+  for (final t in inputs) {
+    final tAx = t.shape[ax];
+    final blockSize = tAx * innerSize;
+    int dst = axOffset * innerSize, src = 0;
+    if (blockSize > 0) {
+      if (isFloat) {
+        final o = outF!, tf = t.f!;
+        if (blockSize >= 8) {
+          for (int outer = 0; outer < outerSize; outer++) {
+            o.setRange(dst, dst + blockSize, tf, src);
+            dst += dstStride;
+            src += blockSize;
+          }
         } else {
-          outI![dstStart + k] = t.intData[srcStart + k];
+          for (int outer = 0; outer < outerSize; outer++) {
+            for (int k = 0; k < blockSize; k++) {
+              o[dst + k] = tf[src + k];
+            }
+            dst += dstStride;
+            src += blockSize;
+          }
+        }
+      } else {
+        final o = outI!, ti = t.intData;
+        for (int outer = 0; outer < outerSize; outer++) {
+          if (blockSize >= 8) {
+            o.setRange(dst, dst + blockSize, ti, src);
+          } else {
+            for (int k = 0; k < blockSize; k++) {
+              o[dst + k] = ti[src + k];
+            }
+          }
+          dst += dstStride;
+          src += blockSize;
         }
       }
-      axOffset += tAx;
     }
+    axOffset += tAx;
   }
   return isFloat
       ? Tensor.float(outF!, outShape)
@@ -949,6 +977,48 @@ Tensor opSlice(Tensor x, List<int> starts, List<int> ends, List<int>? axes,
   final outF = isFloat ? Float32List(n) : null;
   final outI = isFloat ? null : Int64List(n);
   final srcStrides = x.strides;
+
+  // Fast path: every step is 1, so the slice is a stack of contiguous source
+  // runs. Axes after the last partially-selected one are taken whole, so they
+  // fold into the run length; the outer axes are walked with an odometer
+  // instead of unflattening (and allocating) per element.
+  if (n > 0 && normStep.every((v) => v == 1)) {
+    int cut = 0;
+    for (int a = rank - 1; a >= 0; a--) {
+      if (outShape[a] != x.shape[a]) {
+        cut = a;
+        break;
+      }
+    }
+    int run = 1;
+    for (int a = cut; a < rank; a++) {
+      run *= outShape[a];
+    }
+    final outer = n ~/ run;
+    int srcFlat = 0;
+    for (int a = 0; a < rank; a++) {
+      srcFlat += normStart[a] * srcStrides[a];
+    }
+    final coords = List<int>.filled(cut, 0);
+    int dst = 0;
+    for (int o = 0; o < outer; o++) {
+      if (isFloat) {
+        outF!.setRange(dst, dst + run, x.f!, srcFlat);
+      } else {
+        outI!.setRange(dst, dst + run, x.intData, srcFlat);
+      }
+      dst += run;
+      for (int a = cut - 1; a >= 0; a--) {
+        srcFlat += srcStrides[a];
+        if (++coords[a] < outShape[a]) break;
+        srcFlat -= outShape[a] * srcStrides[a];
+        coords[a] = 0;
+      }
+    }
+    return isFloat
+        ? Tensor.float(outF!, outShape)
+        : Tensor.int64(outI!, outShape);
+  }
 
   for (int idx = 0; idx < n; idx++) {
     final outCoords = _unflatten(idx, outShape);
@@ -1269,15 +1339,20 @@ Tensor opReduceMinMax(Tensor x, List<int>? axes, bool keepdims,
 
   final coords = List<int>.filled(rank, 0);
   final total = x.length;
+  // Same odometer as opReduceSum: carry the output index along instead of
+  // recomputing it (and re-testing the axis set) per element.
+  final strideFor = List<int>.generate(
+      rank, (k) => ax.contains(k) ? 0 : outStridesFull[k],
+      growable: false);
+  final xf = x.isFloat ? x.f : null;
+  int outFlat = 0;
   for (int idx = 0; idx < total; idx++) {
-    int outFlat = 0;
-    for (int k = 0; k < rank; k++) {
-      if (!ax.contains(k)) outFlat += coords[k] * outStridesFull[k];
-    }
-    final v = x.getD(idx);
+    final v = xf != null ? xf[idx] : x.getD(idx);
     if (isMax ? v > best[outFlat] : v < best[outFlat]) best[outFlat] = v;
     for (int k = rank - 1; k >= 0; k--) {
+      outFlat += strideFor[k];
       if (++coords[k] < x.shape[k]) break;
+      outFlat -= x.shape[k] * strideFor[k];
       coords[k] = 0;
     }
   }
@@ -2675,12 +2750,15 @@ Tensor opPad(
   final outF = isFloat ? Float32List(n) : null;
   final outI = isFloat ? null : Int64List(n);
 
-  for (int idx = 0; idx < n; idx++) {
-    int srcOff = 0;
-    bool inside = true;
-    for (int a = 0; a < rank; a++) {
-      int i = coords[a] - beg[a];
-      final dim = x.shape[a];
+  // Per-axis source-index maps (-1 = constant fill). Resolving the padding
+  // mode once per output coordinate per axis, rather than once per element,
+  // turns the string-switched inner loop into a table lookup.
+  final srcIndex = <List<int>>[];
+  for (int a = 0; a < rank; a++) {
+    final dim = x.shape[a];
+    final map = List<int>.filled(outShape[a], -1, growable: false);
+    for (int o = 0; o < outShape[a]; o++) {
+      int i = o - beg[a];
       if (i < 0 || i >= dim) {
         switch (mode) {
           case 'reflect':
@@ -2692,18 +2770,95 @@ Tensor opPad(
           case 'edge':
             i = i < 0 ? 0 : dim - 1;
           default: // constant
-            inside = false;
+            i = -1;
         }
       }
-      if (!inside) break;
+      map[o] = i;
+    }
+    srcIndex.add(map);
+  }
+
+  // The source is contiguous, so for the last padded axis the kept region is
+  // one run of `(kept rows) x (trailing axes)` elements; only the pad rows on
+  // that axis and the outer axes need per-row work.
+  int cut = -1;
+  for (int a = rank - 1; a >= 0; a--) {
+    if (beg[a] != 0 || end[a] != 0) {
+      cut = a;
+      break;
+    }
+  }
+  if (isFloat) {
+    if (constantValue != 0) outF!.fillRange(0, n, constantValue);
+  } else {
+    if (constantValue != 0) outI!.fillRange(0, n, constantValue.toInt());
+  }
+  if (cut < 0) {
+    // No padding at all: a straight copy.
+    if (n > 0) {
+      if (isFloat) {
+        outF!.setRange(0, n, x.f!);
+      } else {
+        outI!.setRange(0, n, x.intData);
+      }
+    }
+    return isFloat
+        ? Tensor.float(outF!, outShape)
+        : Tensor.int64(outI!, outShape);
+  }
+
+  int run = 1;
+  for (int a = cut + 1; a < rank; a++) {
+    run *= x.shape[a];
+  }
+  final dimCut = x.shape[cut], outCut = outShape[cut];
+  final cutStride = srcStrides[cut];
+  final lo = beg[cut] > 0 ? beg[cut] : 0;
+  final hiRaw = beg[cut] + dimCut;
+  final hi = hiRaw < outCut ? hiRaw : outCut;
+  final slab = outCut * run;
+  int outerCount = 1;
+  for (int a = 0; a < cut; a++) {
+    outerCount *= outShape[a];
+  }
+
+  void copyRun(int dst, int src, int len) {
+    if (len <= 0) return;
+    if (isFloat) {
+      outF!.setRange(dst, dst + len, x.f!, src);
+    } else {
+      outI!.setRange(dst, dst + len, x.intData, src);
+    }
+  }
+
+  int dst = 0;
+  for (int o = 0; o < outerCount; o++) {
+    int srcOff = 0;
+    bool inside = true;
+    for (int a = 0; a < cut; a++) {
+      final i = srcIndex[a][coords[a]];
+      if (i < 0) {
+        inside = false;
+        break;
+      }
       srcOff += i * srcStrides[a];
     }
-    if (isFloat) {
-      outF![idx] = inside ? x.f![srcOff] : constantValue;
-    } else {
-      outI![idx] = inside ? x.intData[srcOff] : constantValue.toInt();
+    if (inside) {
+      // Kept rows of the cut axis, in one contiguous run.
+      copyRun(dst + lo * run, srcOff + (lo - beg[cut]) * cutStride,
+          (hi - lo) * run);
+      // Pad rows: constant ones are already filled, reflect/edge map back in.
+      for (int oc = 0; oc < lo; oc++) {
+        final i = srcIndex[cut][oc];
+        if (i >= 0) copyRun(dst + oc * run, srcOff + i * cutStride, run);
+      }
+      for (int oc = hi; oc < outCut; oc++) {
+        final i = srcIndex[cut][oc];
+        if (i >= 0) copyRun(dst + oc * run, srcOff + i * cutStride, run);
+      }
     }
-    for (int a = rank - 1; a >= 0; a--) {
+    dst += slab;
+    for (int a = cut - 1; a >= 0; a--) {
       if (++coords[a] < outShape[a]) break;
       coords[a] = 0;
     }
@@ -2757,13 +2912,23 @@ Tensor opReduceSum(Tensor x, List<int>? axes, bool keepdims) {
   final n = outShapeFull.fold<int>(1, (a, b) => a * b);
   final sums = Float64List(n);
   final outStridesFull = Tensor.filledFloat(outShapeFull, 0).strides;
+  // Odometer over the input: the output index advances by a per-axis stride
+  // (0 for reduced axes), so no coordinate list is unflattened per element
+  // and the reduced-axis test is hoisted out of the loop.
+  final strideFor = List<int>.generate(
+      rank, (k) => ax.contains(k) ? 0 : outStridesFull[k],
+      growable: false);
+  final coords = List<int>.filled(rank, 0);
+  final xf = x.isFloat ? x.f : null;
+  int outFlat = 0;
   for (int idx = 0; idx < x.length; idx++) {
-    final coords = _unflatten(idx, x.shape);
-    int outFlat = 0;
-    for (int k = 0; k < rank; k++) {
-      outFlat += (ax.contains(k) ? 0 : coords[k]) * outStridesFull[k];
+    sums[outFlat] += xf != null ? xf[idx] : x.getD(idx);
+    for (int k = rank - 1; k >= 0; k--) {
+      outFlat += strideFor[k];
+      if (++coords[k] < x.shape[k]) break;
+      outFlat -= x.shape[k] * strideFor[k];
+      coords[k] = 0;
     }
-    sums[outFlat] += x.getD(idx);
   }
   final out = Float32List(n);
   for (int k = 0; k < n; k++) {

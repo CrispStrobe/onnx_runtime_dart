@@ -74,7 +74,10 @@ class Tensor {
         'Tensor data length $len != product of shape $shape ($expected)');
   }
 
-  int get length => shape.fold<int>(1, (a, b) => a * b);
+  /// Element count. Cached: `shape` is final, and this getter is read in loop
+  /// conditions all over the interpreter, where re-folding the shape (and
+  /// allocating the fold's closure) once per iteration dominated some ops.
+  late final int length = shape.fold<int>(1, (a, b) => a * b);
   int get rank => shape.length;
   bool get isFloat => dtype == DType.float32;
 
@@ -106,13 +109,15 @@ class Tensor {
     return v.toInt();
   }
 
-  List<int> get strides {
+  /// Row-major strides, cached for the same reason as [length] (callers
+  /// treat it as a field and some read it inside loops). Never mutated.
+  late final List<int> strides = () {
     final s = List<int>.filled(shape.length, 1);
     for (int k = shape.length - 2; k >= 0; k--) {
       s[k] = s[k + 1] * shape[k + 1];
     }
     return s;
-  }
+  }();
 
   /// Returns a Float32-backed copy of this tensor's data (casting ints if needed).
   Float32List asFloatList() {
