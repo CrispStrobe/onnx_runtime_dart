@@ -1,8 +1,11 @@
 /// Micro-benchmark for the Conv shapes that dominate Spotify Basic Pitch.
 ///
-///   dart run tool/conv_bench.dart [--iters N]
+///   dart run tool/conv_bench.dart [--iters N] [--ab gemm|slide]
 ///
-/// Reports min-of-N wall time per shape. Absolute numbers are noisy on a
+/// Runs both arms interleaved in one process, so load drift hits them
+/// equally: `--ab gemm` (default) is im2col+GEMM (A) vs the direct path (B),
+/// `--ab slide` is the direct path's two few-channel micro-kernels.
+/// Reports min-of-N wall time per shape and arm. Absolute numbers are noisy on a
 /// loaded machine; the min over enough iterations is the usable signal.
 library;
 
@@ -66,6 +69,8 @@ void main(List<String> args) {
   final iters = args.contains('--iters')
       ? int.parse(args[args.indexOf('--iters') + 1])
       : 7;
+  final abSlide =
+      args.contains('--ab') && args[args.indexOf('--ab') + 1] == 'slide';
   for (final c in cases) {
     final x = _rand(c.x, 1), w = _rand(c.w, 2), b = _rand([c.w[0]], 3);
     Tensor run() =>
@@ -81,7 +86,13 @@ void main(List<String> args) {
     final best = [1 << 30, 1 << 30];
     for (int i = 0; i < iters; i++) {
       for (int arm = 0; arm < 2; arm++) {
-        nn.directConvMaxChannels = arm == 0 ? 0 : 4096;
+        // --ab slide compares the two direct micro-kernels instead.
+        if (abSlide) {
+          nn.directConvMaxChannels = 4096;
+          nn.directConvSlide = arm == 1;
+        } else {
+          nn.directConvMaxChannels = arm == 0 ? 0 : 4096;
+        }
         final sw = Stopwatch()..start();
         run();
         final us = sw.elapsedMicroseconds;
@@ -89,9 +100,10 @@ void main(List<String> args) {
       }
     }
     nn.directConvMaxChannels = 64;
+    nn.directConvSlide = true;
     final gemmMs = best[0] / 1000, dirMs = best[1] / 1000;
-    print('${c.name.padRight(24)} gemm=${gemmMs.toStringAsFixed(1).padLeft(8)}'
-        ' direct=${dirMs.toStringAsFixed(1).padLeft(8)} ms  '
+    print('${c.name.padRight(24)} A=${gemmMs.toStringAsFixed(1).padLeft(8)}'
+        ' B=${dirMs.toStringAsFixed(1).padLeft(8)} ms  '
         '${(gemmMs / dirMs).toStringAsFixed(2).padLeft(5)}x  '
         '${(macs / 1e6 / dirMs).toStringAsFixed(2).padLeft(6)} GMAC/s  '
         'sum=${checksum.toStringAsFixed(4)}');

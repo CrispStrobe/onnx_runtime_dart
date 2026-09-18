@@ -414,6 +414,10 @@ Tensor opConv(
 /// inside one process; production code should leave it alone.
 int directConvMaxChannels = 64;
 
+/// A/B knob for `tool/conv_bench.dart`: rotate the input window in a register
+/// in the few-output-channel kernel (unit stride/dilation only).
+bool directConvSlide = true;
+
 /// Direct (im2col-free) 2-D convolution, float32, for few output channels.
 ///
 /// Two micro-kernels, both accumulating in `(c, ky, kx)` order into float32
@@ -540,9 +544,48 @@ void _convDirect2d(
         }
       }
 
+      final slide = sw == 1 && dw == 1 && directConvSlide;
       for (; om < mPerGroup; om++) {
         final wBase = (g * mPerGroup + om) * colRows;
         final oRowBase = (b * m + g * mPerGroup + om) * planeOut;
+        if (slide) {
+          // Unit stride and dilation: the four-pixel input window advances by
+          // one lane per kx step, so it is rotated in a register
+          // (shuffle + withW) and only one new value is loaded per tap --
+          // one scalar load per four MACs instead of four.
+          for (int oy = 0; oy < oh; oy++) {
+            final iyBase = (oy + b0) * sh * wp;
+            final oRow = oRowBase + oy * ow;
+            int ox = 0;
+            while (ox < ow) {
+              if (ox + 4 > ow) ox = ow - 4;
+              var acc = Float32x4.zero();
+              int wi = wBase;
+              final i0 = iyBase + ox;
+              for (int c = 0; c < cPerGroup; c++) {
+                int row = i0 + c * planeIn;
+                for (int ky = 0; ky < kh; ky++) {
+                  var win = Float32x4(
+                      xpad[row], xpad[row + 1], xpad[row + 2], xpad[row + 3]);
+                  for (int kx = 0; kx < kw - 1; kx++) {
+                    acc += Float32x4.splat(wf[wi]) * win;
+                    wi++;
+                    win = win.shuffle(Float32x4.yzwx).withW(xpad[row + kx + 4]);
+                  }
+                  acc += Float32x4.splat(wf[wi]) * win;
+                  wi++;
+                  row += wp;
+                }
+              }
+              out[oRow + ox] = acc.x;
+              out[oRow + ox + 1] = acc.y;
+              out[oRow + ox + 2] = acc.z;
+              out[oRow + ox + 3] = acc.w;
+              ox += 4;
+            }
+          }
+          continue;
+        }
         for (int oy = 0; oy < oh; oy++) {
           final iyBase = (oy + b0) * sh * wp;
           final oRow = oRowBase + oy * ow;
