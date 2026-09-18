@@ -950,6 +950,48 @@ Tensor opSlice(Tensor x, List<int> starts, List<int> ends, List<int>? axes,
   final outI = isFloat ? null : Int64List(n);
   final srcStrides = x.strides;
 
+  // Fast path: every step is 1, so the slice is a stack of contiguous source
+  // runs. Axes after the last partially-selected one are taken whole, so they
+  // fold into the run length; the outer axes are walked with an odometer
+  // instead of unflattening (and allocating) per element.
+  if (n > 0 && normStep.every((v) => v == 1)) {
+    int cut = 0;
+    for (int a = rank - 1; a >= 0; a--) {
+      if (outShape[a] != x.shape[a]) {
+        cut = a;
+        break;
+      }
+    }
+    int run = 1;
+    for (int a = cut; a < rank; a++) {
+      run *= outShape[a];
+    }
+    final outer = n ~/ run;
+    int srcFlat = 0;
+    for (int a = 0; a < rank; a++) {
+      srcFlat += normStart[a] * srcStrides[a];
+    }
+    final coords = List<int>.filled(cut, 0);
+    int dst = 0;
+    for (int o = 0; o < outer; o++) {
+      if (isFloat) {
+        outF!.setRange(dst, dst + run, x.f!, srcFlat);
+      } else {
+        outI!.setRange(dst, dst + run, x.intData, srcFlat);
+      }
+      dst += run;
+      for (int a = cut - 1; a >= 0; a--) {
+        srcFlat += srcStrides[a];
+        if (++coords[a] < outShape[a]) break;
+        srcFlat -= outShape[a] * srcStrides[a];
+        coords[a] = 0;
+      }
+    }
+    return isFloat
+        ? Tensor.float(outF!, outShape)
+        : Tensor.int64(outI!, outShape);
+  }
+
   for (int idx = 0; idx < n; idx++) {
     final outCoords = _unflatten(idx, outShape);
     int srcFlat = 0;
