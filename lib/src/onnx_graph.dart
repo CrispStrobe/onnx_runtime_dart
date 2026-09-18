@@ -1960,6 +1960,9 @@ class _AttrMap {
     if (f != null) {
       return Tensor.float(Float32List.fromList([f.f]), const []);
     }
-    throw StateError('Constant node has no recognized value attribute');
+    // Also on the parse path (constant folding runs during load), so the
+    // same contract applies: a Constant carrying no value attribute is a
+    // malformed model, not an invalid program state.
+    throw FormatException('Constant node has no recognized value attribute');
   }
 }

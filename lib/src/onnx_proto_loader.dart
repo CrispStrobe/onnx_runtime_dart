@@ -90,8 +90,16 @@ Uint8List _rawBytes(
     TensorProto t, ExternalDataResolver? ext, int expectedBytes) {
   if (t.dataLocation == TensorProto_DataLocation.EXTERNAL) {
     if (ext == null) {
-      throw StateError('"${t.name}" stores its weights externally — load the '
-          'model with OnnxModel.fromFile so the companion data file is found');
+      // UnsupportedError, not StateError: this is an intentional, documented
+      // reject — `fromBytes` cannot follow a companion file — and the reader
+      // contract (tool/fuzz/onnx_bytes.dart) is that untrusted bytes either
+      // parse or are refused with FormatException or UnsupportedError.
+      // Leaking a StateError here is what the CI fuzz smoke test has been
+      // failing on since 2026-09-04: mutation reaches this branch from the
+      // gqa_kvcache seed in about one run in 200,000.
+      throw UnsupportedError('"${t.name}" stores its weights externally — load '
+          'the model with OnnxModel.fromFile so the companion data file is '
+          'found');
     }
     var location = '';
     var offset = 0;

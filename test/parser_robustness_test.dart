@@ -7,6 +7,8 @@ library;
 
 import 'dart:typed_data';
 
+import 'package:fixnum/fixnum.dart';
+import 'package:onnx_runtime_dart/onnx_proto.dart';
 import 'package:onnx_runtime_dart/onnx_runtime_dart.dart';
 import 'package:onnx_runtime_dart/onnx_runtime_dart_io.dart';
 import 'package:test/test.dart';
@@ -60,6 +62,42 @@ void main() {
     expect(() => OnnxModel.fromBytes(Uint8List(1024 * 1024)),
         throwsA(anything)); // rejects or parses; must not hang
     expect(sw.elapsedMilliseconds, lessThan(2000));
+  });
+
+  // Found by tool/fuzz/onnx_bytes.dart, which had been failing CI since
+  // 2026-09-04: mutating the gqa_kvcache seed reaches the external-data
+  // branch about once in 200,000 runs, and `fromBytes` has no companion file
+  // to resolve against. The refusal is correct and intentional — but it was a
+  // StateError, and the reader contract is parse, or reject with a documented
+  // exception. UnsupportedError is the documented one for "this entry point
+  // cannot do that".
+  test('external weights without a companion file reject as UnsupportedError',
+      () {
+    final model = ModelProto()
+      ..irVersion = Int64(7)
+      ..graph = (GraphProto()
+        ..name = 'external'
+        ..output.add(ValueInfoProto()..name = 'Y')
+        ..initializer.add(TensorProto()
+          ..name = 'W'
+          ..dataType = 1 // FLOAT
+          ..dims.addAll([Int64(2), Int64(2)])
+          ..dataLocation = TensorProto_DataLocation.EXTERNAL
+          ..externalData.addAll([
+            StringStringEntryProto()
+              ..key = 'location'
+              ..value = 'weights.bin',
+          ]))
+        ..node.add(NodeProto()
+          ..opType = 'Identity'
+          ..input.add('W')
+          ..output.add('Y')));
+
+    expect(
+      () => OnnxModel.fromBytes(model.writeToBuffer()),
+      throwsA(isA<UnsupportedError>()),
+      reason: 'must not leak a StateError to a caller handling untrusted bytes',
+    );
   });
 
   group('external-data reference is bounded and can\'t escape the directory',
