@@ -216,7 +216,7 @@ Tensor opConv(
       // results are bitwise identical.
       if (!pointwise &&
           kh * kw >= 4 &&
-          mPerGroup <= _directConvMaxChannels &&
+          mPerGroup <= directConvMaxChannels &&
           ow >= 4) {
         _convDirect2d(xf, wf, out, n, cIn, m, group, h, wd, kh, kw, sh, sw, dh,
             dw, p[0], p[1], p[2], p[3], b0, oh, ow);
@@ -410,8 +410,9 @@ Tensor opConv(
 }
 
 /// Output channels (per group) up to which the direct convolution path beats
-/// im2col + GEMM. Chosen by measurement on Basic Pitch's small-m convs.
-const int _directConvMaxChannels = 8;
+/// im2col + GEMM. Mutable so `tool/conv_bench.dart` can A/B the crossover
+/// inside one process; production code should leave it alone.
+int directConvMaxChannels = 64;
 
 /// Direct (im2col-free) 2-D convolution, float32, for few output channels.
 ///

@@ -40,6 +40,16 @@ const cases = <Case>[
       [0, 0, 0, 0]),
   Case('cqt conv1d_25 m=36 1x256', [1, 1, 1, 22528], [36, 1, 1, 256], [1, 1],
       [0, 0, 0, 0]),
+  // Vision-shaped controls: these must not regress when the direct-path
+  // channel threshold is raised.
+  Case('vision m=64 c=64 3x3 56', [1, 64, 56, 56], [64, 64, 3, 3], [1, 1],
+      [1, 1, 1, 1]),
+  Case('vision m=128 c=128 3x3 28', [1, 128, 28, 28], [128, 128, 3, 3], [1, 1],
+      [1, 1, 1, 1]),
+  Case('vision m=256 c=256 3x3 14', [1, 256, 14, 14], [256, 256, 3, 3], [1, 1],
+      [1, 1, 1, 1]),
+  Case('vision m=512 c=512 3x3 7', [1, 512, 7, 7], [512, 512, 3, 3], [1, 1],
+      [1, 1, 1, 1]),
 ];
 
 Tensor _rand(List<int> shape, int seed) {
@@ -66,16 +76,24 @@ void main(List<String> args) {
       checksum += v;
     }
     final macs = out.length * c.w[1] * c.w[2] * c.w[3];
-    final times = <int>[];
+    // A/B interleaved in one process so load drift hits both arms equally:
+    // arm 0 = im2col + GEMM (threshold 0), arm 1 = direct path.
+    final best = [1 << 30, 1 << 30];
     for (int i = 0; i < iters; i++) {
-      final sw = Stopwatch()..start();
-      run();
-      times.add(sw.elapsedMicroseconds);
+      for (int arm = 0; arm < 2; arm++) {
+        nn.directConvMaxChannels = arm == 0 ? 0 : 4096;
+        final sw = Stopwatch()..start();
+        run();
+        final us = sw.elapsedMicroseconds;
+        if (us < best[arm]) best[arm] = us;
+      }
     }
-    times.sort();
-    final ms = times.first / 1000;
-    print('${c.name.padRight(24)} min=${ms.toStringAsFixed(1).padLeft(8)} ms  '
-        '${(macs / 1e6 / ms).toStringAsFixed(2).padLeft(6)} GMAC/s  '
+    nn.directConvMaxChannels = 64;
+    final gemmMs = best[0] / 1000, dirMs = best[1] / 1000;
+    print('${c.name.padRight(24)} gemm=${gemmMs.toStringAsFixed(1).padLeft(8)}'
+        ' direct=${dirMs.toStringAsFixed(1).padLeft(8)} ms  '
+        '${(gemmMs / dirMs).toStringAsFixed(2).padLeft(5)}x  '
+        '${(macs / 1e6 / dirMs).toStringAsFixed(2).padLeft(6)} GMAC/s  '
         'sum=${checksum.toStringAsFixed(4)}');
   }
 }
