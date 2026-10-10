@@ -8,6 +8,7 @@ library;
 import 'dart:typed_data';
 
 import 'onnx.pb.dart';
+import 'onnx_proto_loader_validation.dart';
 import 'tensor.dart';
 
 // ONNX TensorProto.DataType values this runtime handles. float32 and int64 are
@@ -133,6 +134,11 @@ int _elementCount(List<int> shape, TensorProto t) {
   }
   if (n < 0) {
     throw FormatException('Tensor "${t.name}" shape ${shape} overflows');
+  }
+  final bpe = bytesPerElement(t.dataType);
+  if (bpe != null && n > kMaxTensorBytes ~/ bpe) {
+    throw FormatException(
+        'Tensor "${t.name}" declares $n elements, cap $kMaxTensorBytes bytes');
   }
   return n;
 }

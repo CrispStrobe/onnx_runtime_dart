@@ -24,6 +24,7 @@ library;
 
 import 'dart:typed_data';
 
+import 'src/onnx_proto_loader_validation.dart';
 import 'src/onnx.pb.dart';
 import 'src/onnx_graph.dart';
 import 'src/onnx_proto_loader.dart';
@@ -38,6 +39,8 @@ export 'src/onnx_graph.dart'
     show OnnxGraphExecutor, ExecutionProfile, OnnxExperiment;
 export 'src/onnx_ops.dart' show OnnxRandomInject;
 export 'src/onnx_proto_loader.dart' show ExternalDataResolver;
+export 'src/onnx_proto_loader_validation.dart'
+    show kMaxFoldBytes, kMaxFoldIters, kMaxTensorBytes;
 
 /// A parsed ONNX model ready to run.
 ///
@@ -83,6 +86,9 @@ class OnnxModel {
       throw FormatException('Malformed ONNX model (protobuf decode): $e');
       // GUARD:protobuf_leak <<<
     }
+    // GUARD:foldcap >>>
+    rejectUnsafeFolds(proto);
+    // GUARD:foldcap <<<
     return OnnxModel._(OnnxGraphExecutor(proto,
         externalData: externalData,
         fuse: fuse,
