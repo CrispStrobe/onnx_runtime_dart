@@ -118,7 +118,8 @@ Tensor opMatMulNBits(Tensor a, Tensor bQ, Tensor scales, Tensor? zeroPoints,
     {required int k,
     required int n,
     required int bits,
-    required int blockSize}) {
+    required int blockSize,
+    bool narrowDirect = false}) {
   if (bits != 4) {
     throw UnsupportedError('MatMulNBits: only bits=4 supported, got $bits');
   }
@@ -182,7 +183,12 @@ Tensor opMatMulNBits(Tensor a, Tensor bQ, Tensor scales, Tensor? zeroPoints,
     // The scalar/web kernel accumulates into its output. Reset the reused
     // buffer even though the native SIMD path overwrites every element.
     if (firstColumn != 0) tileOut.fillRange(0, m * width, 0);
-    gemm.matmulKernel(af, 0, bt, 0, tileOut, 0, m, k, width);
+    // A reconstructed tile is already narrow and contiguous. When opted in,
+    // the native kernel can read aligned tiles directly; its existing guards retain the
+    // packed/remainder path for unsupported shapes or alignment. Web ignores
+    // this hint and keeps the scalar accumulation path.
+    gemm.matmulKernel(af, 0, bt, 0, tileOut, 0, m, k, width,
+        narrowDirect: narrowDirect);
     if (!identical(tileOut, out)) {
       for (int row = 0; row < m; row++) {
         out.setRange(row * n + firstColumn, row * n + firstColumn + width,

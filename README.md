@@ -315,6 +315,12 @@ build/gector_benchmark --model model.onnx --tokenizer tokenizer.json \
   --warmup 2 --iterations 10 --workers 2
 ```
 
+Add `--narrow-direct true` to measure the existing
+`OnnxExperiment.narrowDirectGemm` strategy for eligible INT4 tiles. The flag
+defaults to `false`, accepts only `true` or `false`, and records the selected
+experiments in complete and partial reports. For application code, opt in with
+`loadOnnxModel(path, experiments: {OnnxExperiment.narrowDirectGemm})`.
+
 The JSON report separates graph/pool setup, the first inference, warm first-pass
 latencies, process peak RSS before reference float buffers are loaded, and a
 separate operator profile. Timings replay saved inputs; they do not measure a
@@ -376,7 +382,10 @@ imply that every operator, including `MatMulNBits`, runs on that pool.
   int64 widening would cost. **`MatMulNBits`** (`com.microsoft`, 4-bit
   block-quantized weights, packed zero points, partial blocks) keeps weights
   packed (0.5 bytes/weight) and reconstructs FP32 tiles of at most 32 columns
-  per call. Packed zero points start at a byte boundary for each column,
+  per call. Opting into `OnnxExperiment.narrowDirectGemm` lets eligible native
+  tiles reuse the existing direct SIMD kernel without another packing copy;
+  the experiment remains disabled by default and retains its shape/alignment
+  guards and fallbacks. Packed zero points start at a byte boundary for each column,
   including when the block count is odd. Unpacked float zero points, `g_idx`,
   and fused bias remain unsupported and fail explicitly.
 - **Fusion (load-time, automatic):** the erf-GELU chain

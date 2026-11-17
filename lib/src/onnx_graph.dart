@@ -1787,7 +1787,9 @@ class OnnxGraphExecutor {
               k: attrs.getInt('K')!,
               n: attrs.getInt('N')!,
               bits: attrs.getInt('bits') ?? 4,
-              blockSize: attrs.getInt('block_size')!)
+              blockSize: attrs.getInt('block_size')!,
+              narrowDirect: experiments
+                  .contains(OnnxExperiment.narrowDirectGemm))
         ];
       case 'QLinearConv':
         final qcInt8 = _initializerElemType[node.input[7]] == 3;

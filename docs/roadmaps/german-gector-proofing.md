@@ -89,3 +89,29 @@ is avoiding redundant packing of the already narrow dequantized tile using
 the existing aligned GEMM path. Keep each source/binary identity and report
 separately; do not replace either baseline or infer hosted speed from the
 local comparison.
+
+
+## Second hypothesis and existing experiment contract
+
+The second hypothesis reuses the existing aligned narrow GEMM path to avoid
+repacking an already narrow reconstructed tile. It is selected by the existing
+`OnnxExperiment.narrowDirectGemm` flag, remains disabled by default, and is
+forwarded explicitly through MatMulNBits dispatch. The benchmark accepts
+`--narrow-direct true|false` (default false) and records its experiment names
+in complete, partial and runtime-failure reports.
+
+Twenty-seven focused operator, graph, benchmark-configuration and existing
+ORT-fixture tests pass; analysis and AOT compilation pass. The final opt-in
+AOT executable has SHA-256
+`648c7928f5a4b19bd09d0d7fd17b3d7c2963da363e0f0aa0bbb5b0d8c447cf9c`.
+With the flag enabled, the two-case real-model verification passes all four
+saved passes, tokenizer alignment and exact selected tags. Forward medians
+were 1.36/1.41 seconds and peak RSS was 463,605,760 bytes. The earlier
+unconditional prototype and its faster 1.06/1.25-second observations remain
+separate experiments; local samples are noisy and must not be cherry-picked.
+
+The initial two runtime hypotheses are complete. They improve the measured
+local quantized path but do not qualify the 500 ms complete-check target.
+Repeat the full hosted protocol with this exact source and the experiment
+explicitly enabled for the INT4 arm. Preserve the original hosted baseline
+and the per-model opt-in boundary; no further initial kernel search is planned.

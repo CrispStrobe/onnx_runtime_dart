@@ -25,16 +25,70 @@ void main() {
     test('exact FP32 result: A=$shape N=$n block=$blockSize zp=$zeroPoints',
         () {
       final data = _fixture(shape, n, blockSize, zeroPoints: zeroPoints);
-      final actual = quant.opMatMulNBits(data.a, data.b, data.scales, data.zp,
-          k: shape.last, n: n, bits: 4, blockSize: blockSize);
       // weights is constructed from the original logical quantized values,
       // independently of reading the packed bytes. opMatMul uses the same
       // FP32 GEMM as the former full-matrix dequantization implementation.
       final expected = ops.opMatMul(data.a, data.weights);
-      expect(actual.shape, [...shape.take(shape.length - 1), n]);
-      expect(actual.asFloatList(), orderedEquals(expected.asFloatList()));
+      for (final narrowDirect in [false, true]) {
+        final actual = quant.opMatMulNBits(data.a, data.b, data.scales, data.zp,
+            k: shape.last,
+            n: n,
+            bits: 4,
+            blockSize: blockSize,
+            narrowDirect: narrowDirect);
+        expect(actual.shape, [...shape.take(shape.length - 1), n]);
+        expect(actual.asFloatList(), orderedEquals(expected.asFloatList()),
+            reason: 'narrowDirect=$narrowDirect');
+      }
     });
   }
+
+  test('graph dispatch supports default and narrowDirectGemm experiment', () {
+    final data = _fixture([1, 4, 40], 65, 16, zeroPoints: true);
+    final graph = GraphProto()
+      ..input.add(ValueInfoProto()..name = 'A')
+      ..output.add(ValueInfoProto()..name = 'Y')
+      ..initializer.addAll([
+        TensorProto()
+          ..name = 'B'
+          ..dataType = 2
+          ..dims.addAll(data.b.shape.map(Int64.new))
+          ..rawData = data.b.u8!,
+        TensorProto()
+          ..name = 'S'
+          ..dataType = 1
+          ..dims.addAll(data.scales.shape.map(Int64.new))
+          ..floatData.addAll(data.scales.asFloatList()),
+        TensorProto()
+          ..name = 'Z'
+          ..dataType = 2
+          ..dims.addAll(data.zp!.shape.map(Int64.new))
+          ..rawData = data.zp!.u8!,
+      ])
+      ..node.add(NodeProto()
+        ..opType = 'MatMulNBits'
+        ..domain = 'com.microsoft'
+        ..input.addAll(['A', 'B', 'S', 'Z'])
+        ..output.add('Y')
+        ..attribute.addAll([
+          for (final entry
+              in {'K': 40, 'N': 65, 'bits': 4, 'block_size': 16}.entries)
+            AttributeProto()
+              ..name = entry.key
+              ..i = Int64(entry.value),
+        ]));
+    final bytes = (ModelProto()..graph = graph).writeToBuffer();
+    final expected = ops.opMatMul(data.a, data.weights);
+    for (final experiments in [
+      <OnnxExperiment>{},
+      {OnnxExperiment.narrowDirectGemm}
+    ]) {
+      final model = OnnxModel.fromBytes(bytes, experiments: experiments);
+      final actual = model.run({'A': data.a}, ['Y'])['Y']!;
+      expect(actual.shape, expected.shape);
+      expect(actual.asFloatList(), orderedEquals(expected.asFloatList()));
+    }
+  });
 
   test('packed zero-point rows are byte-aligned when block count is odd', () {
     final data = _fixture([1, 35], 3, 16, zeroPoints: true);

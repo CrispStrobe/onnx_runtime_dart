@@ -19,12 +19,7 @@ void main() {
   setUp(() => directory = Directory.systemTemp.createTempSync('gector-test-'));
   tearDown(() => directory.deleteSync(recursive: true));
 
-  Future<Map<String, dynamic>> run(Map<String, dynamic> fixture) async {
-    File('${directory.path}/reference.json')
-        .writeAsStringSync(jsonEncode(fixture));
-    final previousExit = exitCode;
-    try {
-      await benchmark.main([
+  List<String> arguments({String? narrowDirect}) => [
         '--model',
         '${directory.path}/model.onnx',
         '--tokenizer',
@@ -39,7 +34,16 @@ void main() {
         '1',
         '--workers',
         '0',
-      ]);
+        if (narrowDirect != null) ...['--narrow-direct', narrowDirect],
+      ];
+
+  Future<Map<String, dynamic>> run(Map<String, dynamic> fixture,
+      {String? narrowDirect}) async {
+    File('${directory.path}/reference.json')
+        .writeAsStringSync(jsonEncode(fixture));
+    final previousExit = exitCode;
+    try {
+      await benchmark.main(arguments(narrowDirect: narrowDirect));
       return jsonDecode(
         File('${directory.path}/report.json').readAsStringSync(),
       ) as Map<String, dynamic>;
@@ -54,6 +58,7 @@ void main() {
       final fixture = _fixture(directory);
       final report = await run(fixture);
       expect(report['passed'], isTrue, reason: report.toString());
+      expect(report['experiments'], isEmpty);
       expect(report['complete'], isTrue);
       expect(report['cases_timed'], 1);
       expect(report['passes_validated'], 2);
@@ -67,11 +72,39 @@ void main() {
     },
   );
 
+  for (final enabled in [false, true]) {
+    test('records explicit narrow-direct=$enabled experiment selection',
+        () async {
+      final report = await run(_fixture(directory), narrowDirect: '$enabled');
+      expect(report['passed'], isTrue, reason: report.toString());
+      expect(report['experiments'], enabled ? ['narrowDirectGemm'] : isEmpty);
+    });
+  }
+
+  test('rejects non-boolean narrow-direct values', () async {
+    final fixture = _fixture(directory);
+    File('${directory.path}/reference.json')
+        .writeAsStringSync(jsonEncode(fixture));
+    final previousExit = exitCode;
+    try {
+      for (final value in ['yes', 'TRUE', '1']) {
+        exitCode = 0;
+        await benchmark.main(arguments(narrowDirect: value));
+        expect(exitCode, 1, reason: 'accepted invalid value $value');
+      }
+      expect(File('${directory.path}/report.json').existsSync(), isFalse);
+    } finally {
+      exitCode = previousExit;
+    }
+  });
+
   test('a missing graph head cannot silently pass', () async {
-    final report = await run(_fixture(directory, missingDetectionHead: true));
+    final report = await run(_fixture(directory, missingDetectionHead: true),
+        narrowDirect: 'true');
     expect(report['passed'], isFalse);
     expect(report['complete'], isFalse);
     expect(report['error'], contains('Missing graph output: logits_d'));
+    expect(report['experiments'], ['narrowDirectGemm']);
   });
 
   test(

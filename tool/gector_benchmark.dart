@@ -26,7 +26,7 @@ Future<void> main(List<String> args) async {
     stdout.writeln(
       'gector_benchmark --model FILE --tokenizer FILE '
       '--fixtures FILE --report FILE [--warmup 2] [--iterations 10] '
-      '[--workers 0]',
+      '[--workers 0] [--narrow-direct false]',
     );
     return;
   }
@@ -40,6 +40,7 @@ Future<void> main(List<String> args) async {
       'passed': false,
       'complete': false,
       'stage': 'validating_fixture',
+      'experiments': options.experimentNames,
     });
     final report = await _benchmark(options);
     _writeReport(reportPath, report);
@@ -73,6 +74,7 @@ Future<void> main(List<String> args) async {
 class _Options {
   final String model, tokenizer, fixtures, report;
   final int warmup, iterations, workers;
+  final bool narrowDirect;
   const _Options(
     this.model,
     this.tokenizer,
@@ -81,7 +83,13 @@ class _Options {
     this.warmup,
     this.iterations,
     this.workers,
+    this.narrowDirect,
   );
+
+  Set<OnnxExperiment> get experiments =>
+      narrowDirect ? const {OnnxExperiment.narrowDirectGemm} : const {};
+  List<String> get experimentNames =>
+      [for (final value in experiments) value.name];
 
   factory _Options.parse(List<String> args) {
     const allowed = {
@@ -92,6 +100,7 @@ class _Options {
       '--warmup',
       '--iterations',
       '--workers',
+      '--narrow-direct',
     };
     final values = <String, String>{};
     for (var i = 0; i < args.length; i += 2) {
@@ -108,6 +117,10 @@ class _Options {
     final warmup = int.parse(values['--warmup'] ?? '2');
     final iterations = int.parse(values['--iterations'] ?? '10');
     final workers = int.parse(values['--workers'] ?? '0');
+    final direct = values['--narrow-direct'] ?? 'false';
+    if (direct != 'true' && direct != 'false') {
+      throw ArgumentError('--narrow-direct must be true or false');
+    }
     if (warmup < 0 || iterations < 1 || workers < 0) {
       throw ArgumentError(
         'warmup/workers must be >= 0; iterations must be > 0',
@@ -121,6 +134,7 @@ class _Options {
       warmup,
       iterations,
       workers,
+      direct == 'true',
     );
   }
 }
@@ -218,6 +232,7 @@ Future<Map<String, Object?>> _benchmark(_Options options) async {
     'model_variant': inferenceModel?['variant'] ?? 'float32',
     'tokenizer_sha256': tokenizerHash,
     'fixture_sha256': fixtureHash,
+    'experiments': options.experimentNames,
     'expected_cases': cases.length,
     'expected_passes': passCount,
     'tokenizer_passed': tokenizerFailures.isEmpty,
@@ -238,7 +253,9 @@ Future<Map<String, Object?>> _benchmark(_Options options) async {
   checkpoint('loading_model');
   final rssBeforeLoad = ProcessInfo.currentRss;
   final setup = Stopwatch()..start();
-  final model = loadOnnxModel(options.model); // all token positions, both heads
+  // Retain all token positions and both heads. Hardware-sensitive strategies
+  // stay disabled unless explicitly selected by the benchmark caller.
+  final model = loadOnnxModel(options.model, experiments: options.experiments);
   setup.stop();
   final rssAfterLoad = ProcessInfo.currentRss;
   _require(

@@ -4,6 +4,10 @@
 
 - Reconstruct `MatMulNBits` INT4 weights in 32-column FP32 tiles, bounding
   dequantization scratch instead of allocating the complete K×N matrix.
+  The existing, disabled-by-default `OnnxExperiment.narrowDirectGemm` optionally
+  reuses the direct SIMD kernel for eligible tiles without another packing copy.
+  The GECToR benchmark exposes `--narrow-direct true|false` and records the
+  selected experiments in complete and partial reports.
   Packed zero points now respect each column's byte boundary for odd block
   counts; unsupported unpacked zero points fail explicitly.
 
