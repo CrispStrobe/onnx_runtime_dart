@@ -284,6 +284,48 @@ final tok = WordPieceTokenizer.fromFile('tokenizer.json');
 final ids = tok.encode('Machine learning in pure Dart.'); // [101, 3698, ... , 102]
 ```
 
+For token classifiers and edit taggers, `WordPieceTokenizer.encodePretokenized`
+keeps the supplied source-word indices alongside the token ids:
+
+```dart
+final encoded = tok.encodePretokenized(['Das', 'gefällt', 'mir.']);
+// encoded.ids: token ids, with the tokenizer's configured special tokens.
+// encoded.wordIds: original word index per piece; null for added specials.
+```
+
+Punctuation and multiple WordPiece tokens from one supplied word retain that
+word's index. Empty words emit no tokens and do not renumber later words.
+`addSpecial`, `maxLength`, and `direction` behave as for `encode`; truncation
+can leave a partial word. These indices are not document character offsets:
+the caller must retain its original text spans.
+
+### GECToR backend qualification
+
+`tool/gector_benchmark.dart` consumes the exact-input reference fixtures exported
+by Quds' `tools/proofing/german_model/export_reference.py`. It verifies the model
+and tokenizer hashes, pretokenized alignment, both output heads and every saved
+pass against ONNX Runtime. It rejects missing outputs and mismatched fixtures.
+
+```sh
+dart pub get
+mkdir -p build
+dart compile exe tool/gector_benchmark.dart -o build/gector_benchmark
+build/gector_benchmark --model model.onnx --tokenizer tokenizer.json \
+  --fixtures reference/reference.json --report dart-report.json \
+  --warmup 2 --iterations 10 --workers 2
+```
+
+The JSON report separates graph/pool setup, the first inference, warm first-pass
+latencies, process peak RSS before reference float buffers are loaded, and a
+separate operator profile. Timings replay saved inputs; they do not measure a
+complete correction loop, document guards, or UI scheduling. Numerical parity
+uses the identical model file on both backends. A quantized model therefore
+needs its own ONNX Runtime fixtures and a separate edit-quality comparison with
+the original FP32 model. ONNX `MatMulNBits` INT4 is distinct from GGUF `Q4_K`;
+the current Dart INT4 implementation dequantizes each weight matrix to FP32 on
+each call. `--workers` configures the GEMM isolate pool, and does not imply that
+every operator, including `MatMulNBits`, runs on that pool.
+
 ## Supported operators
 
 - **Math:** `Add`, `Sub`, `Mul`, `Div`, `Pow`, `Sqrt`, `Reciprocal`, `Abs`,

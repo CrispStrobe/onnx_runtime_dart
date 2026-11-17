@@ -28,17 +28,18 @@ class WordPieceTokenizer {
   final List<TemplateItem>? singleTpl, pairTpl; // post-processor templates
 
   WordPieceTokenizer._(
-      this.vocab,
-      this.idToToken,
-      this.prefix,
-      this.unk,
-      this.maxChars,
-      this.lowercase,
-      this.stripAccents,
-      this.clsId,
-      this.sepId,
-      this.singleTpl,
-      this.pairTpl);
+    this.vocab,
+    this.idToToken,
+    this.prefix,
+    this.unk,
+    this.maxChars,
+    this.lowercase,
+    this.stripAccents,
+    this.clsId,
+    this.sepId,
+    this.singleTpl,
+    this.pairTpl,
+  );
 
   factory WordPieceTokenizer.fromFile(String path) =>
       WordPieceTokenizer.fromJson(File(path).readAsStringSync());
@@ -61,8 +62,9 @@ class WordPieceTokenizer {
   factory WordPieceTokenizer._fromJson(String source) {
     final j = jsonDecode(source) as Map<String, dynamic>;
     final model = j['model'] as Map<String, dynamic>;
-    final vocab = (model['vocab'] as Map<String, dynamic>)
-        .map((k, v) => MapEntry(k, (v as num).toInt()));
+    final vocab = (model['vocab'] as Map<String, dynamic>).map(
+      (k, v) => MapEntry(k, (v as num).toInt()),
+    );
     final idToToken = {for (final e in vocab.entries) e.value: e.key};
     final norm = j['normalizer'] as Map<String, dynamic>?;
     final lower = norm?['lowercase'] as bool? ?? true;
@@ -263,18 +265,84 @@ class WordPieceTokenizer {
   /// template (`[CLS] … [SEP]` for BERT). `addSpecial: false` returns the bare
   /// piece ids. [maxLength] truncates the total sequence (reserving room for
   /// the special tokens) — [direction] keeps the front (`right`) or tail.
-  List<int> encode(String text,
-      {bool addSpecial = true,
-      int? maxLength,
-      TruncationDirection direction = TruncationDirection.right}) {
+  List<int> encode(
+    String text, {
+    bool addSpecial = true,
+    int? maxLength,
+    TruncationDirection direction = TruncationDirection.right,
+  }) {
     var raw = _rawIds(text);
     if (maxLength != null) {
       raw = truncateSingle(
-          raw, maxLength - (addSpecial ? _singleSpecials : 0), direction);
+        raw,
+        maxLength - (addSpecial ? _singleSpecials : 0),
+        direction,
+      );
     }
     if (!addSpecial) return raw;
     if (singleTpl != null) return applyTemplate(singleTpl!, raw, null).$1;
     return [if (clsId >= 0) clsId, ...raw, if (sepId >= 0) sepId];
+  }
+
+  /// Encode already-separated [words], retaining the source word for every
+  /// token. This matches the WordPiece `is_pretokenized` convention: every
+  /// piece produced from one supplied word has that word's zero-based index,
+  /// even when normalization/pre-tokenization splits it further. Added
+  /// special tokens have a null word id; empty or normalized-away words emit
+  /// no tokens, without renumbering the following words.
+  ///
+  /// The returned word ids are indices into [words], not character offsets.
+  /// Callers should retain their own original text spans. Token classification
+  /// can use the first token for each word; a truncated word may be partial,
+  /// just as with [encode]. [maxLength] includes added special tokens.
+  ({List<int> ids, List<int?> wordIds}) encodePretokenized(
+    List<String> words, {
+    bool addSpecial = true,
+    int? maxLength,
+    TruncationDirection direction = TruncationDirection.right,
+  }) {
+    var raw = <int>[];
+    var wordIds = <int?>[];
+    for (var word = 0; word < words.length; word++) {
+      final pieces = _rawIds(words[word]);
+      raw.addAll(pieces);
+      wordIds.addAll(List<int?>.filled(pieces.length, word));
+    }
+    if (maxLength != null) {
+      final budget = maxLength - (addSpecial ? _singleSpecials : 0);
+      final keep = budget < 0 ? 0 : (budget < raw.length ? budget : raw.length);
+      final start =
+          direction == TruncationDirection.right ? 0 : raw.length - keep;
+      raw = raw.sublist(start, start + keep);
+      wordIds = wordIds.sublist(start, start + keep);
+    }
+    if (!addSpecial) return (ids: raw, wordIds: wordIds);
+
+    final ids = <int>[];
+    final aligned = <int?>[];
+    if (singleTpl != null) {
+      for (final item in singleTpl!) {
+        if (item.specialId != null) {
+          ids.add(item.specialId!);
+          aligned.add(null);
+        } else if (!item.seqIsB) {
+          ids.addAll(raw);
+          aligned.addAll(wordIds);
+        }
+      }
+    } else {
+      if (clsId >= 0) {
+        ids.add(clsId);
+        aligned.add(null);
+      }
+      ids.addAll(raw);
+      aligned.addAll(wordIds);
+      if (sepId >= 0) {
+        ids.add(sepId);
+        aligned.add(null);
+      }
+    }
+    return (ids: ids, wordIds: aligned);
   }
 
   /// Encode a sentence pair (query, document) for cross-encoders, following the
@@ -282,14 +350,22 @@ class WordPieceTokenizer {
   /// BERT). Returns the token ids and matching `token_type_ids`. [maxLength]
   /// bounds the total (reserving the special tokens); [strategy]/[direction]
   /// choose which side and end to trim.
-  (List<int>, List<int>) encodePair(String a, String b,
-      {int? maxLength,
-      TruncationStrategy strategy = TruncationStrategy.longestFirst,
-      TruncationDirection direction = TruncationDirection.right}) {
+  (List<int>, List<int>) encodePair(
+    String a,
+    String b, {
+    int? maxLength,
+    TruncationStrategy strategy = TruncationStrategy.longestFirst,
+    TruncationDirection direction = TruncationDirection.right,
+  }) {
     var aIds = _rawIds(a), bIds = _rawIds(b);
     if (maxLength != null) {
       (aIds, bIds) = truncatePair(
-          aIds, bIds, maxLength - _pairSpecials, strategy, direction);
+        aIds,
+        bIds,
+        maxLength - _pairSpecials,
+        strategy,
+        direction,
+      );
     }
     if (pairTpl != null) return applyTemplate(pairTpl!, aIds, bIds);
     // Default BERT pair layout when no template is present.
@@ -301,6 +377,7 @@ class WordPieceTokenizer {
     return (ids, types);
   }
 
-  List<String> tokens(String text, {bool addSpecial = true}) =>
-      [for (final id in encode(text, addSpecial: addSpecial)) idToToken[id]!];
+  List<String> tokens(String text, {bool addSpecial = true}) => [
+        for (final id in encode(text, addSpecial: addSpecial)) idToToken[id]!,
+      ];
 }

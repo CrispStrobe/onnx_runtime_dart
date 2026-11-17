@@ -16,6 +16,7 @@ dependencies:
   fixnum: ^1.1.1
 
 dev_dependencies:
+  crypto: ^3.0.8
   lints: ^5.0.0
   test: ^1.25.0
   covfuzz: ^0.1.0

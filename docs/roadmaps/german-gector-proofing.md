@@ -43,3 +43,18 @@ without a release/version bump. Large models and raw arrays stay outside Git.
 If the bounded optimization round misses the canonical resource/latency targets,
 hand the same fixtures to the conditional CrispEmbed Q4_K or Rust/native ONNX
 backend. Source preparation alone does not select the Dart backend.
+
+## First implementation checkpoint
+
+The roadmap was pushed and read back at
+`3ac10dd64c655657186ba89e673cb183d2250682` before implementation. The first code
+increment adds the pretokenized API, exact-input benchmark and focused tests.
+Under Dart 3.14.0, 22 targeted tests pass, changed Dart files pass analysis with
+fatal infos, and the benchmark compiles to an AOT executable. These checks use
+tiny synthetic graphs; no real-model performance is established by them.
+
+The benchmark records tokenizer and runtime parity separately. A tokenizer
+mismatch fails overall qualification while verified saved inputs still permit
+measuring the executor. Atomic progress reports retain incomplete runs. The
+next gate is hosted execution against both the frozen original and separately
+verified ONNX INT4 candidate, each compared with its own native ORT outputs.

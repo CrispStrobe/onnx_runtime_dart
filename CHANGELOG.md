@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Add `WordPieceTokenizer.encodePretokenized`, returning token ids and original
+  word indices for token classification and edit tagging, including template
+  specials, normalization, punctuation, and left/right truncation.
+- Add an AOT-ready GECToR qualification tool for exact-input two-head parity,
+  selected tags, cold/warm inference timings, process RSS, and operator profiling.
+  This is a backend benchmark; a complete correction provider is not included.
+
 ## 0.10.8
 
 - Retain four hardware-sensitive execution strategies as explicit, per-model
