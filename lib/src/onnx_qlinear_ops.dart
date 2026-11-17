@@ -108,9 +108,12 @@ Tensor opQLinearMatMul(Tensor a, Tensor aS, Tensor? aZp, Tensor b, Tensor bS,
 /// `MatMulNBits` (com.microsoft): `y = A · dequant(B)ᵀ`, B block-quantized
 /// to 4 bits. B is `[N, ceil(K/block_size), block_size/2]` packed low-nibble
 /// first; scales are one float per (column, block); zero points default to 8
-/// or come packed 4-bit the same way. The weight matrix is dequantized into
-/// a transposed [K×N] buffer per call (weights stay packed in memory — that
-/// is the point of int4 — and the GEMM rides the SIMD kernel).
+/// or are packed uint8, with each column starting at a byte boundary.
+///
+/// Reconstruct at most 32 columns at a time. The FP32 rounding and GEMM
+/// accumulation order stay unchanged, while scratch is bounded by K×32
+/// rather than K×N. This also avoids writing a wide transposed matrix with
+/// large column strides. Weights remain packed between calls.
 Tensor opMatMulNBits(Tensor a, Tensor bQ, Tensor scales, Tensor? zeroPoints,
     {required int k,
     required int n,
@@ -119,42 +122,75 @@ Tensor opMatMulNBits(Tensor a, Tensor bQ, Tensor scales, Tensor? zeroPoints,
   if (bits != 4) {
     throw UnsupportedError('MatMulNBits: only bits=4 supported, got $bits');
   }
+  if (k <= 0 || n < 0 || blockSize < 16 || (blockSize & (blockSize - 1)) != 0) {
+    throw ArgumentError('MatMulNBits: require K > 0, N >= 0 and a '
+        'power-of-two block_size >= 16');
+  }
+  if (a.rank == 0 || a.shape.last != k) {
+    throw ArgumentError('MatMulNBits: A last dimension must equal K');
+  }
+  if (zeroPoints != null && zeroPoints.u8 == null) {
+    throw UnsupportedError(
+        'MatMulNBits: only packed uint8 zero points supported');
+  }
   final nBlocks = (k + blockSize - 1) ~/ blockSize;
   final blobBytes = blockSize ~/ 2;
   final bBytes = bQ.u8 ?? Uint8List.fromList(bQ.asIntList());
   final sf = scales.asFloatList();
   final zpBytes = zeroPoints?.u8;
-
-  // Dequantize into B^T [k × n] so the standard row-major GEMM applies.
-  final bt = Float32List(k * n);
-  for (int col = 0; col < n; col++) {
-    final colBase = col * nBlocks * blobBytes;
-    for (int blk = 0; blk < nBlocks; blk++) {
-      final scale = sf[col * nBlocks + blk];
-      double zp = 8;
-      if (zpBytes != null) {
-        // 4-bit packed zero points, one per (column, block).
-        final zpIdx = col * nBlocks + blk;
-        final byte = zpBytes[zpIdx >> 1];
-        zp = ((zpIdx & 1) == 0 ? byte & 0xF : byte >> 4).toDouble();
-      }
-      final blobBase = colBase + blk * blobBytes;
-      final kBase = blk * blockSize;
-      final kEnd = (kBase + blockSize < k ? kBase + blockSize : k);
-      for (int kk = kBase; kk < kEnd; kk++) {
-        final j = kk - kBase;
-        final byte = bBytes[blobBase + (j >> 1)];
-        final q = (j & 1) == 0 ? byte & 0xF : byte >> 4;
-        bt[kk * n + col] = (q - zp) * scale;
-      }
-    }
+  final zpColumnBytes = (nBlocks + 1) ~/ 2;
+  if (bBytes.length < n * nBlocks * blobBytes ||
+      sf.length < n * nBlocks ||
+      (zpBytes != null && zpBytes.length < n * zpColumnBytes)) {
+    throw ArgumentError(
+        'MatMulNBits: truncated weight, scale or zero-point data');
   }
-
   final af = a.asFloatList();
   final m = a.length ~/ k;
   final out = Float32List(m * n);
-  gemm.matmulKernel(af, 0, bt, 0, out, 0, m, k, n);
-  return Tensor.float(out, [...a.shape.sublist(0, a.rank - 1), n]);
+  final shape = [...a.shape.sublist(0, a.rank - 1), n];
+  if (m == 0 || n == 0) return Tensor.float(out, shape);
+
+  final tileWidth = n < 32 ? n : 32;
+  final bt = Float32List(k * tileWidth);
+  // A small single tile can write directly into the result, avoiding copies.
+  final tileOut = n <= tileWidth ? out : Float32List(m * tileWidth);
+  for (int firstColumn = 0; firstColumn < n; firstColumn += tileWidth) {
+    final width = n - firstColumn < tileWidth ? n - firstColumn : tileWidth;
+    for (int localColumn = 0; localColumn < width; localColumn++) {
+      final col = firstColumn + localColumn;
+      final colBase = col * nBlocks * blobBytes;
+      for (int blk = 0; blk < nBlocks; blk++) {
+        final scale = sf[col * nBlocks + blk];
+        double zp = 8;
+        if (zpBytes != null) {
+          // ONNX pads an odd final zero-point nibble at each column boundary.
+          final byte = zpBytes[col * zpColumnBytes + (blk >> 1)];
+          zp = ((blk & 1) == 0 ? byte & 0xF : byte >> 4).toDouble();
+        }
+        final blobBase = colBase + blk * blobBytes;
+        final kBase = blk * blockSize;
+        final kEnd = kBase + blockSize < k ? kBase + blockSize : k;
+        for (int kk = kBase; kk < kEnd; kk++) {
+          final j = kk - kBase;
+          final byte = bBytes[blobBase + (j >> 1)];
+          final q = (j & 1) == 0 ? byte & 0xF : byte >> 4;
+          bt[kk * width + localColumn] = (q - zp) * scale;
+        }
+      }
+    }
+    // The scalar/web kernel accumulates into its output. Reset the reused
+    // buffer even though the native SIMD path overwrites every element.
+    if (firstColumn != 0) tileOut.fillRange(0, m * width, 0);
+    gemm.matmulKernel(af, 0, bt, 0, tileOut, 0, m, k, width);
+    if (!identical(tileOut, out)) {
+      for (int row = 0; row < m; row++) {
+        out.setRange(row * n + firstColumn, row * n + firstColumn + width,
+            tileOut, row * width);
+      }
+    }
+  }
+  return Tensor.float(out, shape);
 }
 
 /// Integer 2-D convolution accumulator shared by ConvInteger / QLinearConv:

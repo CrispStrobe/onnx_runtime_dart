@@ -1,7 +1,7 @@
 # German GECToR runtime qualification
 
 Date: 2026-11-17. Branch: `feat/german-gector-proofing`.
-Status: scoped implementation authorized; no model/performance qualification yet.
+Status: baseline runtime parity measured; bounded INT4 optimization in progress; application qualification pending.
 
 The [canonical Quds roadmap](https://github.com/CrispStrobe/quds_office_suite/blob/feat/german-gector-proofing/docs/roadmaps/german-gector-proofing.md) owns the cross-repository scope,
 frozen model, acceptance criteria and product integration. Base:
@@ -24,9 +24,10 @@ frozen model, acceptance criteria and product integration. Base:
 
 Q4_K is a ggml/GGUF format and is the user's preferred native candidate.
 This runtime loads ONNX, not GGUF. ONNX MatMulNBits INT4 must remain separately
-named and qualified. The current implementation expands each packed matrix
-to F32 for each call, so lower file size does not prove faster execution or
-low peak memory. Original F32 is a control, not an approved shipping format.
+named and qualified. The original implementation expanded each packed matrix
+to F32 for each call. The first optimization reconstructs at most 32 columns
+at a time; lower file size still does not prove faster execution or low peak
+memory. Original F32 is a control, not an approved shipping format.
 
 Compare exact IDs/alignment, both head outputs, selected edit/detection
 decisions and corrected text. Do not use lastTokenLogits, pooled embeddings,
@@ -58,3 +59,33 @@ mismatch fails overall qualification while verified saved inputs still permit
 measuring the executor. Atomic progress reports retain incomplete runs. The
 next gate is hosted execution against both the frozen original and separately
 verified ONNX INT4 candidate, each compared with its own native ORT outputs.
+
+
+## First measured optimization: bounded dequantization tiles
+
+The [retained local baseline](https://github.com/CrispStrobe/quds_office_suite/blob/28cbbe4e780460736bdacccb798be9005aae3d14/docs/validation/german-gector/2026-11-17-local-smoke/README.md)
+shows correct saved-input execution but slow MatMulNBits. The full hosted
+[baseline run 44053903485](https://github.com/CrispStrobe/quds_office_suite/actions/runs/44053903485)
+has now passed all 30 cases / 40 saved passes for both original and INT4
+models, including tokenizer/runtime parity and quantized correction
+nonregression on that frozen panel. Baseline Dart INT4 aggregate forward
+median/p95 were 767/835 ms, with peak RSS 499,945,472 bytes. These are
+short 5..12-token inputs, not qualification through 64 tokens or a complete
+Dart correction loop.
+
+The first optimization limits reconstructed weight scratch to K*32 floats,
+preserving FP32 reconstruction and K-order accumulation. It also fixes
+packed zero-point byte padding between columns with an odd number of blocks,
+and rejects unsupported floating zero points explicitly. Eighteen focused
+operator/reference tests and analysis pass. The synthetic diagnostic keeps
+the former full-matrix algorithm for reproducible comparison; noisy synthetic
+speed ratios are not a product claim.
+
+The two-case real-model tile probe preserves both heads and exact selected
+tags on all four saved passes. Its forward medians were 1.84/1.89 seconds
+on the capped local host, versus baseline INT4 1.90/2.15 seconds. This is
+insufficient to qualify the checker. The next and final initial hypothesis
+is avoiding redundant packing of the already narrow dequantized tile using
+the existing aligned GEMM path. Keep each source/binary identity and report
+separately; do not replace either baseline or infer hosted speed from the
+local comparison.

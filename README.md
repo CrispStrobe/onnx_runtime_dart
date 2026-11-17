@@ -322,9 +322,9 @@ complete correction loop, document guards, or UI scheduling. Numerical parity
 uses the identical model file on both backends. A quantized model therefore
 needs its own ONNX Runtime fixtures and a separate edit-quality comparison with
 the original FP32 model. ONNX `MatMulNBits` INT4 is distinct from GGUF `Q4_K`;
-the current Dart INT4 implementation dequantizes each weight matrix to FP32 on
-each call. `--workers` configures the GEMM isolate pool, and does not imply that
-every operator, including `MatMulNBits`, runs on that pool.
+the Dart INT4 implementation reconstructs FP32 weights in tiles of at most 32
+columns on each call. `--workers` configures the GEMM isolate pool, and does not
+imply that every operator, including `MatMulNBits`, runs on that pool.
 
 ## Supported operators
 
@@ -374,9 +374,11 @@ every operator, including `MatMulNBits`, runs on that pool.
   round-half-to-even requantization. int8/uint8 tensors use **compact 1-byte
   storage** end to end — a 1 GB int8 model needs ~1 GB, not the 8 GB an
   int64 widening would cost. **`MatMulNBits`** (`com.microsoft`, 4-bit
-  block-quantized weights, packed zero points, partial blocks) runs int4
-  exports with weights kept packed (0.5 bytes/weight); dequantization streams
-  through the SIMD GEMM per call.
+  block-quantized weights, packed zero points, partial blocks) keeps weights
+  packed (0.5 bytes/weight) and reconstructs FP32 tiles of at most 32 columns
+  per call. Packed zero points start at a byte boundary for each column,
+  including when the block count is odd. Unpacked float zero points, `g_idx`,
+  and fused bias remain unsupported and fail explicitly.
 - **Fusion (load-time, automatic):** the erf-GELU chain
   (`0.5·x·(1+Erf(x/√2))`) fuses to a single pass, and the attention epilogue
   `MatMul(Softmax(MatMul(Q,K)·s + mask), V)` fuses so scale + mask + softmax

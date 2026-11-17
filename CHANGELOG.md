@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Reconstruct `MatMulNBits` INT4 weights in 32-column FP32 tiles, bounding
+  dequantization scratch instead of allocating the complete K×N matrix.
+  Packed zero points now respect each column's byte boundary for odd block
+  counts; unsupported unpacked zero points fail explicitly.
+
 - Add `WordPieceTokenizer.encodePretokenized`, returning token ids and original
   word indices for token classification and edit tagging, including template
   specials, normalization, punctuation, and left/right truncation.
