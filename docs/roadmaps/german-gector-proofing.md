@@ -1,11 +1,41 @@
 # German GECToR runtime qualification
 
 Date: 2026-11-17. Branch: `feat/german-gector-proofing`.
-Status: full hosted saved-input qualification complete; bounded Dart optimization closed; CrispEmbed/ggml mixed Q4_K selected next; application qualification pending.
+Status: bounded Dart optimization closed; selected CrispEmbed native F32/mixed Q4_K controls implemented and passed locally; optional Quds provider under final validation; application/device qualification pending.
 
 The [canonical Quds roadmap](https://github.com/CrispStrobe/quds_office_suite/blob/feat/german-gector-proofing/docs/roadmaps/german-gector-proofing.md) owns the cross-repository scope,
 frozen model, acceptance criteria and product integration. Base:
 `7bdf47d815a6516da69d29c671240d10e68723ff`.
+
+The incoming `main` at that commit is already an ancestor of this feature
+branch. The 17 November continuation required no additional default-branch
+merge and changes no runtime code, dependency version or release here.
+
+## Native handoff completed — 17 November 2026
+
+The selected CrispEmbed lane now has exact ONNX-to-GGUF conversion, a standalone
+prepared-input CPU C ABI, and the declared mixed pack: 72 Q4_K encoder matrices,
+Q8_0 token embeddings, F16 position/head matrices, and F32 type/norm/bias tensors.
+The [complete local native evidence](https://github.com/CrispStrobe/quds_office_suite/blob/feat/german-gector-proofing/docs/validation/german-gector/2026-11-17-native/README.md)
+retains both policy versions, failures, source/build/license identities and exact
+inputs. Corrected policy v2 passed both trained heads, all 30 cases / 40 saved
+passes, exact selected tags and full upstream correction nonregression for F32
+and mixed Q4_K. Required 64/128/256-token shape/numerical probes also passed.
+
+The original 9/18 fixes and 1/12 changed clean controls remain; the Swiss false
+edit is unresolved. The mixed candidate still fails the fixed 0.002 absolute
+error diagnostic. Its 256-token forward median/p95 was 668/680 ms on the local
+host, so the result does not qualify the complete-checker latency target or
+intended devices. Preserve the Dart measurements and closed tuning scope below.
+
+The [optional Quds provider](https://github.com/CrispStrobe/quds_office_suite/tree/feat/german-gector-proofing/packages/quds_proofing_gector)
+contains the shared tokenizer/iterative decoder, conservative guards, persistent
+worker and optional native adapter; final integration validation is in progress.
+Manual/F7 opt-in remains separate from default proofing. Native ORT remains a
+conditional fallback behind its strict distribution-license gate. The measured
+CrispEmbed Linux build also records its system runtime licenses; this is not an
+all-MIT binary or a target-platform distribution approval. No Actions job was
+launched or awaited for this local continuation.
 
 ## This repository's bounded work
 
@@ -153,11 +183,11 @@ change is not a causal measurement of the kernel optimization. The separate
 local observations and both hosted records remain intact.
 
 The Dart forward p95 alone still exceeds the provisional 500 ms complete-check
-budget on short inputs. Close this bounded Dart tuning round and select
-**CrispEmbed/ggml with the declared mixed Q4_K recipe** for the next native
-implementation and qualification slice. This chooses the next engineering
-step; it does not qualify a shipping backend. The full Dart correction/guard
-loop, longer inputs, target devices and application integration remain open.
+budget on short inputs. This closed the bounded Dart tuning round and selected
+**CrispEmbed/ggml with the declared mixed Q4_K recipe** for the native slice
+reported above. The historical Dart results do not qualify a shipping backend
+or a complete Dart correction/guard loop; target-device and guarded application
+qualification remain open.
 
 Native ONNX through Rust remains a conditional fallback. Although ORT's
 top-level license is MIT, its pinned
